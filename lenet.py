@@ -301,14 +301,17 @@ def evaluate_lenet5(learning_rate=0.1, n_epochs=200,
 
     rng = numpy.random.RandomState(23455)
 
+    # load data and split train/test set stratified by classes
     dsl = DataSetLoader()
     X, y = dsl.load_train()
     sss = StratifiedShuffleSplit(y, n_iter=1, random_state=rng)
+
+    # load data into the GPU
     for train_ind, test_ind in sss:
         train_x = theano.shared(X[train_ind], borrow=True)
         test_x = theano.shared(X[test_ind], borrow=True)
-        train_y = T.cast(theano.shared(y[train_ind], borrow=True), 'int32')
-        test_y = T.cast(theano.shared(y[test_ind], borrow=True), 'int32')
+        train_y = T.cast(theano.shared(y[train_ind], borrow=True), dtype='int32')
+        test_y = T.cast(theano.shared(y[test_ind], borrow=True), dtype='int32')
 
     # compute number of minibatches for training, validation and testing
     n_train_batches = train_x.get_value(borrow=True).shape[0]
@@ -329,9 +332,8 @@ def evaluate_lenet5(learning_rate=0.1, n_epochs=200,
     ######################
     print '... building the model'
 
-    # Reshape matrix of rasterized images of shape (batch_size, 28 * 28)
+    # Reshape matrix of rasterized images of shape (batch_size, 48 * 48)
     # to a 4D tensor, compatible with our LeNetConvPoolLayer
-    # (28, 28) is the size of MNIST images.
     layer0_input = x.reshape((batch_size, 1, 48, 48))
 
     # Construct the first convolutional pooling layer:
@@ -389,6 +391,14 @@ def evaluate_lenet5(learning_rate=0.1, n_epochs=200,
         }
     )
 
+    test_logloss = theano.function(
+        [index],
+        layer3.negative_log_likelihood(y),
+        givens={
+            x: test_x[index * batch_size: (index + 1) * batch_size],
+            y: test_y[index * batch_size: (index + 1) * batch_size]
+        }
+    )
     # create a list of all model parameters to be fit by gradient descent
     params = layer3.params + layer2.params + layer1.params + layer0.params
 
@@ -432,7 +442,7 @@ def evaluate_lenet5(learning_rate=0.1, n_epochs=200,
                                   # on the validation set; in this case we
                                   # check every epoch
 
-    best_validation_loss = numpy.inf
+    best_test_loss = numpy.inf
     best_iter = 0
     test_score = 0.
     start_time = time.clock()
@@ -453,35 +463,29 @@ def evaluate_lenet5(learning_rate=0.1, n_epochs=200,
             if (iter + 1) % validation_frequency == 0:
 
                 # compute zero-one loss on validation set
-                validation_losses = [test_model(i) for i
+                test_losses = [test_model(i) for i
                                      in xrange(n_test_batches)]
-                this_validation_loss = numpy.mean(validation_losses)
-                print('epoch %i, minibatch %i/%i, validation error %f %%' %
+                test_loglosses = [test_logloss(i) for i
+                                     in xrange(n_test_batches)]
+                this_test_loss = numpy.mean(test_losses)
+                this_test_logloss = numpy.mean(test_loglosses)
+                print('epoch %i, minibatch %i/%i, validation error %.2f loglikelihood %f %%' %
                       (epoch, minibatch_index + 1, n_train_batches,
-                       this_validation_loss * 100.))
+                       this_test_loss * 100., this_test_logloss))
 
                 # if we got the best validation score until now
-                if this_validation_loss < best_validation_loss:
+                if this_test_loss < best_test_loss:
 
                     #improve patience if loss improvement is good enough
-                    if this_validation_loss < best_validation_loss *  \
+                    if this_test_loss < best_test_loss *  \
                        improvement_threshold:
                         patience = max(patience, iter * patience_increase)
 
                     # save best validation score and iteration number
-                    best_validation_loss = this_validation_loss
-                    best_iter = iter
+                    best_test_loss = this_test_loss
+                    best_test_logloss = this_test_logloss
 
-                    # test it on the test set
-                    test_losses = [
-                        test_model(i)
-                        for i in xrange(n_test_batches)
-                    ]
-                    test_score = numpy.mean(test_losses)
-                    print(('     epoch %i, minibatch %i/%i, test error of '
-                           'best model %f %%') %
-                          (epoch, minibatch_index + 1, n_train_batches,
-                           test_score * 100.))
+                    best_iter = iter
 
             if patience <= iter:
                 done_looping = True
@@ -490,8 +494,8 @@ def evaluate_lenet5(learning_rate=0.1, n_epochs=200,
     end_time = time.clock()
     print('Optimization complete.')
     print('Best validation score of %f %% obtained at iteration %i, '
-          'with test performance %f %%' %
-          (best_validation_loss * 100., best_iter + 1, test_score * 100.))
+          'with loglikelihood %f %%' %
+          (best_test_loss * 100., best_iter + 1, best_test_logloss))
     print >> sys.stderr, ('The code for file ' +
                           os.path.split(__file__)[1] +
                           ' ran for %.2fm' % ((end_time - start_time) / 60.))
