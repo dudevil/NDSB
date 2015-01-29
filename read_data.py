@@ -23,6 +23,7 @@ class DataSetLoader:
             data = np.load(self.train_file)
             X = data[:, :-1]
             y = data[:, -1]
+            y = y.astype('int32')
             return X, y
         x = []
         y = []
@@ -31,7 +32,7 @@ class DataSetLoader:
             files = os.listdir(directory)
             # set up the array to store images and labels
             n_images = len(files)
-            images = np.zeros((n_images, self.img_size * self.img_size), dtype=np.float)
+            images = np.zeros((n_images, self.img_size * self.img_size), dtype='float32')
             # the last directory is a class label
             self.class_labels[self._num_label] = os.path.split(directory)[-1]
             # create labels list
@@ -43,7 +44,7 @@ class DataSetLoader:
             x.append(images)
         # concatenate the arrays from all classes and append labels
         x = np.vstack(tuple(x))
-        y = np.array(y, dtype=np.int)
+        y = np.array(y, dtype='int32')
         # save the processed file
         np.save(self.train_file, np.hstack((x, y.reshape(-1, 1))))
         return x, y
