@@ -13,9 +13,12 @@ from theano.tensor.nnet import conv
 from sklearn.cross_validation import StratifiedShuffleSplit
 from read_data import DataSetLoader
 
+def relu(x):
+    return x * (x > 0)
+
 class HiddenLayer(object):
     def __init__(self, rng, input, n_in, n_out, W=None, b=None,
-                 activation=T.tanh):
+                 activation=relu):
         """
         Typical hidden layer of a MLP: units are fully-connected and have
         sigmoidal activation function. Weight matrix W is of shape (n_in,n_out)
@@ -205,6 +208,9 @@ class LogisticRegression(object):
         else:
             raise NotImplementedError()
 
+    def predict_proba(self):
+        return self.p_y_given_x
+
 
 class LeNetConvPoolLayer(object):
     """Pool Layer of a convolutional network """
@@ -281,8 +287,8 @@ class LeNetConvPoolLayer(object):
         self.params = [self.W, self.b]
 
 
-def evaluate_lenet5(learning_rate=0.1, n_epochs=200,
-                    nkerns=[20, 50], batch_size=500):
+def evaluate_lenet5(learning_rate=0.1, n_epochs=29,
+                    nkerns=[20, 50], batch_size=200):
     """ Demonstrates lenet on MNIST dataset
 
     :type learning_rate: float
@@ -303,29 +309,26 @@ def evaluate_lenet5(learning_rate=0.1, n_epochs=200,
 
     # load data and split train/test set stratified by classes
     dsl = DataSetLoader()
-    X, y = dsl.load_train()
-    sss = StratifiedShuffleSplit(y, n_iter=1, random_state=rng)
+    train_x, valid_x, train_y, valid_y = dsl.train_test_split(random_state=rng)
+    test_x = dsl.load_test()
 
-    # load data into the GPU
-    for train_ind, test_ind in sss:
-        train_x = theano.shared(X[train_ind], borrow=True)
-        test_x = theano.shared(X[test_ind], borrow=True)
-        train_y = T.cast(theano.shared(y[train_ind], borrow=True), dtype='int32')
-        test_y = T.cast(theano.shared(y[test_ind], borrow=True), dtype='int32')
-
+    train_xx = train_x # tmp
     # compute number of minibatches for training, validation and testing
-    n_train_batches = train_x.get_value(borrow=True).shape[0]
-    n_test_batches = test_x.get_value(borrow=True).shape[0]
-    n_train_batches /= batch_size
-    n_test_batches /= batch_size
+    n_train_batches = train_x.shape[0] / batch_size
+    n_val_batches = valid_x.shape[0] / batch_size
+    n_test_batches = test_x.shape[0] / batch_size
+
+    train_x = theano.shared(train_x, borrow=True)
+    valid_x = theano.shared(valid_x, borrow=True)
+    # won't fit into my gpu memory
+    #test_x = theano.shared(test_x, borrow=True)
+    train_y = T.cast(theano.shared(train_y, borrow=True), dtype='int32')
+    valid_y = T.cast(theano.shared(valid_y, borrow=True), dtype='int32')
 
     # allocate symbolic variables for the data
     index = T.lscalar()  # index to a [mini]batch
-
-
     x = T.matrix('x')   # the data is presented as rasterized images
-    y = T.ivector('y')  # the labels are presented as 1D vector of
-                        # [int] labels
+    y = T.ivector('y')  # the labels are presented as 1D vector of [int] labels
 
     ######################
     # BUILD ACTUAL MODEL #
@@ -386,8 +389,8 @@ def evaluate_lenet5(learning_rate=0.1, n_epochs=200,
         [index],
         layer3.errors(y),
         givens={
-            x: test_x[index * batch_size: (index + 1) * batch_size],
-            y: test_y[index * batch_size: (index + 1) * batch_size]
+            x: valid_x[index * batch_size: (index + 1) * batch_size],
+            y: valid_y[index * batch_size: (index + 1) * batch_size]
         }
     )
 
@@ -395,10 +398,12 @@ def evaluate_lenet5(learning_rate=0.1, n_epochs=200,
         [index],
         layer3.negative_log_likelihood(y),
         givens={
-            x: test_x[index * batch_size: (index + 1) * batch_size],
-            y: test_y[index * batch_size: (index + 1) * batch_size]
+            x: valid_x[index * batch_size: (index + 1) * batch_size],
+            y: valid_y[index * batch_size: (index + 1) * batch_size]
         }
     )
+
+
     # create a list of all model parameters to be fit by gradient descent
     params = layer3.params + layer2.params + layer1.params + layer0.params
 
@@ -424,7 +429,10 @@ def evaluate_lenet5(learning_rate=0.1, n_epochs=200,
             y: train_y[index * batch_size: (index + 1) * batch_size]
         }
     )
-    # end-snippet-1
+
+    train_err = []
+    test_err = []
+    n_iter = []
 
     ###############
     # TRAIN MODEL #
@@ -442,7 +450,7 @@ def evaluate_lenet5(learning_rate=0.1, n_epochs=200,
                                   # on the validation set; in this case we
                                   # check every epoch
 
-    best_test_loss = numpy.inf
+    best_test_logloss = numpy.inf
     best_iter = 0
     test_score = 0.
     start_time = time.clock()
@@ -464,28 +472,32 @@ def evaluate_lenet5(learning_rate=0.1, n_epochs=200,
 
                 # compute zero-one loss on validation set
                 test_losses = [test_model(i) for i
-                                     in xrange(n_test_batches)]
+                                     in xrange(n_val_batches)]
                 test_loglosses = [test_logloss(i) for i
-                                     in xrange(n_test_batches)]
+                                     in xrange(n_val_batches)]
                 this_test_loss = numpy.mean(test_losses)
                 this_test_logloss = numpy.mean(test_loglosses)
                 print('epoch %i, minibatch %i/%i, validation error %.2f loglikelihood %f %%' %
                       (epoch, minibatch_index + 1, n_train_batches,
                        this_test_loss * 100., this_test_logloss))
 
+                # save for later analysis
+                train_err.append(cost_ij)
+                test_err.append(test_logloss)
+                n_iter.append(iter + 1)
                 # if we got the best validation score until now
-                if this_test_loss < best_test_loss:
+                if this_test_logloss < best_test_logloss:
 
                     #improve patience if loss improvement is good enough
-                    if this_test_loss < best_test_loss *  \
+                    if this_test_logloss < best_test_logloss *  \
                        improvement_threshold:
                         patience = max(patience, iter * patience_increase)
 
                     # save best validation score and iteration number
-                    best_test_loss = this_test_loss
                     best_test_logloss = this_test_logloss
-
+                    best_test_loss = this_test_loss
                     best_iter = iter
+
 
             if patience <= iter:
                 done_looping = True
@@ -499,6 +511,34 @@ def evaluate_lenet5(learning_rate=0.1, n_epochs=200,
     print >> sys.stderr, ('The code for file ' +
                           os.path.split(__file__)[1] +
                           ' ran for %.2fm' % ((end_time - start_time) / 60.))
+
+    ### Predicting
+    ###
+    res = []
+    print(test_x.shape)
+    parts = numpy.array_split(test_x, 4)
+    test_x_part = theano.shared(parts[0], borrow=True)
+    predict = theano.function(
+        [index],
+        layer3.predict_proba(),
+        givens={
+            x: test_x_part[index * batch_size: (index + 1) * batch_size],
+            },
+    )
+    for part in parts:
+        test_x_part.set_value(part, borrow=True)
+        n_part_batches = part.shape[0] / batch_size
+        for minibatch_index in xrange(n_part_batches):
+            tmp = predict(minibatch_index)
+            res.append(tmp)
+    result = numpy.vstack(tuple(res))
+    print(result.shape)
+    dsl.save_submission(result, '1')
+
+
+    #print("Saving: %s %s %s" % (n_iter, test_err, train_err))
+    #results = numpy.array(zip(n_iter, test_err, train_err), dtype=numpy.float)
+    #numpy.save("data/tidy/relu_errors.npy", results)
 
 if __name__ == '__main__':
     evaluate_lenet5()
