@@ -5,12 +5,11 @@ import sys
 import time
 
 import numpy
-
 import theano
 import theano.tensor as T
+from theano.tensor.shared_randomstreams import RandomStreams
 from theano.tensor.signal import downsample
 from theano.tensor.nnet import conv
-from sklearn.cross_validation import StratifiedShuffleSplit
 from read_data import DataSetLoader
 
 def relu(x):
@@ -61,9 +60,9 @@ class HiddenLayer(object):
         #        tanh.
         if W is None:
             W_values = numpy.asarray(
-                rng.uniform(
-                    low=-numpy.sqrt(6. / (n_in + n_out)),
-                    high=numpy.sqrt(6. / (n_in + n_out)),
+                rng.normal(
+                    loc=0.0,
+                    scale=0.001,
                     size=(n_in, n_out)
                 ),
                 dtype=theano.config.floatX
@@ -74,7 +73,8 @@ class HiddenLayer(object):
             W = theano.shared(value=W_values, name='W', borrow=True)
 
         if b is None:
-            b_values = numpy.zeros((n_out,), dtype=theano.config.floatX)
+            # initialize biases to 0.01
+            b_values = numpy.ones((n_out,), dtype=theano.config.floatX) / 100
             b = theano.shared(value=b_values, name='b', borrow=True)
 
         self.W = W
@@ -87,6 +87,24 @@ class HiddenLayer(object):
         )
         # parameters of the model
         self.params = [self.W, self.b]
+
+class DropOutLayer(object):
+
+    def __init__(self, input, input_shape, rng, rate=0.5):
+        rstream = RandomStreams(seed=rng.randint(9999))
+        mask = rstream.binomial(n=1, p=rate, size=input_shape)
+        self.output = input * T.cast(mask, theano.config.floatX)
+
+class MaxPoolLayer(object):
+
+    def __init__(self, input, pool_size=(2, 2)):
+        # downsample each feature map individually, using maxpooling
+        self.output = downsample.max_pool_2d(
+            input=input,
+            ds=pool_size,
+            ignore_border=True
+        )
+
 
 
 class LogisticRegression(object):
@@ -215,7 +233,7 @@ class LogisticRegression(object):
 class LeNetConvPoolLayer(object):
     """Pool Layer of a convolutional network """
 
-    def __init__(self, rng, input, filter_shape, image_shape, poolsize=(2, 2)):
+    def __init__(self, rng, input, filter_shape, image_shape, activation=relu):
         """
         Allocate a LeNetConvPoolLayer with shared variable internal parameters.
 
@@ -233,33 +251,22 @@ class LeNetConvPoolLayer(object):
         :param image_shape: (batch size, num input feature maps,
                              image height, image width)
 
-        :type poolsize: tuple or list of length 2
-        :param poolsize: the downsampling (pooling) factor (#rows, #cols)
         """
 
         assert image_shape[1] == filter_shape[1]
         self.input = input
 
-        # there are "num input feature maps * filter height * filter width"
-        # inputs to each hidden unit
-        fan_in = numpy.prod(filter_shape[1:])
-        # each unit in the lower layer receives a gradient from:
-        # "num output feature maps * filter height * filter width" /
-        #   pooling size
-        fan_out = (filter_shape[0] * numpy.prod(filter_shape[2:]) /
-                   numpy.prod(poolsize))
-        # initialize weights with random weights
-        W_bound = numpy.sqrt(6. / (fan_in + fan_out))
+        # initialize weights with gaussian with mean 0 and deviation 0.01
         self.W = theano.shared(
             numpy.asarray(
-                rng.uniform(low=-W_bound, high=W_bound, size=filter_shape),
+                rng.normal(loc=0, scale=0.01, size=filter_shape),
                 dtype=theano.config.floatX
             ),
             borrow=True
         )
 
-        # the bias is a 1D tensor -- one bias per output feature map
-        b_values = numpy.zeros((filter_shape[0],), dtype=theano.config.floatX)
+        # the bias is a 1D tensor -- one bias per output feature map, initialize to 0.1
+        b_values = numpy.ones((filter_shape[0],), dtype=theano.config.floatX) / 10
         self.b = theano.shared(value=b_values, borrow=True)
 
         # convolve input feature maps with filters
@@ -270,25 +277,42 @@ class LeNetConvPoolLayer(object):
             image_shape=image_shape
         )
 
-        # downsample each feature map individually, using maxpooling
-        pooled_out = downsample.max_pool_2d(
-            input=conv_out,
-            ds=poolsize,
-            ignore_border=True
-        )
-
         # add the bias term. Since the bias is a vector (1D array), we first
         # reshape it to a tensor of shape (1, n_filters, 1, 1). Each bias will
         # thus be broadcasted across mini-batches and feature map
         # width & height
-        self.output = T.tanh(pooled_out + self.b.dimshuffle('x', 0, 'x', 'x'))
+        self.output = activation(conv_out + self.b.dimshuffle('x', 0, 'x', 'x'))
 
         # store parameters of this layer
         self.params = [self.W, self.b]
 
 
-def evaluate_lenet5(learning_rate=0.1, n_epochs=29,
-                    nkerns=[20, 50], batch_size=200):
+# using the alternative formulation of nesterov momentum described at https://github.com/lisa-lab/pylearn2/pull/136
+# such that the gradient can be evaluated at the current parameters.
+def gen_updates_nesterov_momentum(loss, all_parameters, learning_rate, momentum, weight_decay):
+    all_grads = [theano.grad(loss, param) for param in all_parameters]
+    updates = []
+    for param_i, grad_i in zip(all_parameters, all_grads):
+        mparam_i = theano.shared(param_i.get_value()*0.)
+        full_grad = grad_i + weight_decay * param_i
+        v = momentum * mparam_i - learning_rate * full_grad # new momemtum
+        w = param_i + momentum * v - learning_rate * full_grad # new parameter values
+        updates.append((mparam_i, v))
+        updates.append((param_i, w))
+    return updates
+
+def gen_updates_regular_momentum(loss, all_parameters, learning_rate, momentum, weight_decay):
+    all_grads = [theano.grad(loss, param) for param in all_parameters]
+    updates = []
+    for param_i, grad_i in zip(all_parameters, all_grads):
+        mparam_i = theano.shared(param_i.get_value()*0.)
+        v = momentum * mparam_i - weight_decay * learning_rate * param_i - learning_rate * grad_i
+        updates.append((mparam_i, v))
+        updates.append((param_i, param_i + v))
+    return updates
+
+def evaluate_lenet5(learning_rate=0.1, n_epochs=500,
+                    nkerns=[64, 96, 96], batch_size=200):
     """ Demonstrates lenet on MNIST dataset
 
     :type learning_rate: float
@@ -305,7 +329,7 @@ def evaluate_lenet5(learning_rate=0.1, n_epochs=29,
     :param nkerns: number of kernels on each layer
     """
 
-    rng = numpy.random.RandomState(23455)
+    rng = numpy.random.RandomState(010215)
 
     # load data and split train/test set stratified by classes
     dsl = DataSetLoader()
@@ -341,53 +365,80 @@ def evaluate_lenet5(learning_rate=0.1, n_epochs=29,
 
     # Construct the first convolutional pooling layer:
     # filtering reduces the image size to (48-5+1 , 48-5+1) = (44, 44)
-    # maxpooling reduces this further to (24/2, 24/2) = (22, 22)
-    # 4D output tensor is thus of shape (batch_size, nkerns[0], 12, 12)
     layer0 = LeNetConvPoolLayer(
         rng,
         input=layer0_input,
         image_shape=(batch_size, 1, 48, 48),
-        filter_shape=(nkerns[0], 1, 5, 5),
-        poolsize=(2, 2)
+        filter_shape=(nkerns[0], 1, 5, 5)
+    )
+
+    # pooling reduces space from (44/3, 44/3) to (14,14)
+    layer1 = MaxPoolLayer(
+        input=layer0.output,
+        pool_size=(3, 3)
     )
 
     # Construct the second convolutional pooling layer
-    # filtering reduces the image size to (22-5+1, 22-5+1) = (18, 18)
-    # maxpooling reduces this further to (8/2, 8/2) = (9, 9)
-    # 4D output tensor is thus of shape (batch_size, nkerns[1], 9, 9)
-    layer1 = LeNetConvPoolLayer(
+    # filtering reduces the image size to (14-3+1, 14-3+1) = (12, 12)
+    # 4D output tensor is thus of shape (batch_size, nkerns[1], 2, 2)
+    layer2 = LeNetConvPoolLayer(
         rng,
-        input=layer0.output,
-        image_shape=(batch_size, nkerns[0], 22, 22),
-        filter_shape=(nkerns[1], nkerns[0], 5, 5),
-        poolsize=(2, 2)
+        input=layer1.output,
+        image_shape=(batch_size, nkerns[0], 14, 14),
+        filter_shape=(nkerns[1], nkerns[0], 3, 3),
+    )
+
+    # (12-3+1, 12-3+1) = (10,10)
+    layer3 = LeNetConvPoolLayer(
+          rng,
+          input=layer2.output,
+          image_shape=(batch_size, nkerns[1], 12, 12),
+          filter_shape=(nkerns[2], nkerns[1], 3, 3),
+    )
+
+    # (10/3,10/3) = (3, 3)
+    layer4 = MaxPoolLayer(
+        input=layer3.output,
+        pool_size=(3, 3)
     )
 
     # the HiddenLayer being fully-connected, it operates on 2D matrices of
     # shape (batch_size, num_pixels) (i.e matrix of rasterized images).
-    # This will generate a matrix of shape (batch_size, nkerns[1] * 9 * 9),
-    # or (500, 20 * 9 * 9) = (500, 1620) with the default values.
-    layer2_input = layer1.output.flatten(2)
+    # This will generate a matrix of shape (batch_size, nkerns[2] * 4 * 4),
+    # or (500, 20 * 4 * 4) = (500, 1620) with the default values.
+    layer5_input = layer4.output.flatten(2)
 
     # construct a fully-connected sigmoidal layer
-    layer2 = HiddenLayer(
+    layer5 = HiddenLayer(
         rng,
-        input=layer2_input,
-        n_in=nkerns[1] * 9 * 9,
-        n_out=500,
-        activation=T.tanh
+        input=layer5_input,
+        n_in=nkerns[2] * 3 * 3,
+        n_out=512,
+        activation=relu
     )
 
+    layer6 = DropOutLayer(layer5.output, (512,), rng)
+
+    layer7 = HiddenLayer(
+        rng,
+        input=layer6.output,
+        n_in=512,
+        n_out=512,
+        activation=relu
+    )
+
+    layer8 = DropOutLayer(layer7.output, (512,), rng)
+
     # classify the values of the fully-connected sigmoidal layer
-    layer3 = LogisticRegression(input=layer2.output, n_in=500, n_out=121)
+    layer9 = LogisticRegression(input=layer8.output, n_in=512, n_out=121)
 
     # the cost we minimize during training is the NLL of the model
-    cost = layer3.negative_log_likelihood(y)
+    cost = layer9.negative_log_likelihood(y) + 0.0001 * (T.sum(T.sqr(layer5.W)) + T.sum(T.sqr(layer7.W))) / batch_size
 
     # create a function to compute the mistakes that are made by the model
     test_model = theano.function(
         [index],
-        layer3.errors(y),
+        layer9.errors(y),
         givens={
             x: valid_x[index * batch_size: (index + 1) * batch_size],
             y: valid_y[index * batch_size: (index + 1) * batch_size]
@@ -396,7 +447,7 @@ def evaluate_lenet5(learning_rate=0.1, n_epochs=29,
 
     test_logloss = theano.function(
         [index],
-        layer3.negative_log_likelihood(y),
+        layer9.negative_log_likelihood(y),
         givens={
             x: valid_x[index * batch_size: (index + 1) * batch_size],
             y: valid_y[index * batch_size: (index + 1) * batch_size]
@@ -405,7 +456,8 @@ def evaluate_lenet5(learning_rate=0.1, n_epochs=29,
 
 
     # create a list of all model parameters to be fit by gradient descent
-    params = layer3.params + layer2.params + layer1.params + layer0.params
+    params = layer0.params + layer2.params + layer3.params + \
+             layer5.params + layer9.params
 
     # create a list of gradients for all model parameters
     grads = T.grad(cost, params)
@@ -420,6 +472,9 @@ def evaluate_lenet5(learning_rate=0.1, n_epochs=29,
         for param_i, grad_i in zip(params, grads)
     ]
 
+    # replace Add Nesterov momentum
+    #updates = gen_updates_regular_momentum(cost, params, learning_rate, 0.9, 0.0)
+
     train_model = theano.function(
         [index],
         cost,
@@ -427,7 +482,7 @@ def evaluate_lenet5(learning_rate=0.1, n_epochs=29,
         givens={
             x: train_x[index * batch_size: (index + 1) * batch_size],
             y: train_y[index * batch_size: (index + 1) * batch_size]
-        }
+        },
     )
 
     train_err = []
@@ -483,8 +538,9 @@ def evaluate_lenet5(learning_rate=0.1, n_epochs=29,
 
                 # save for later analysis
                 train_err.append(cost_ij)
-                test_err.append(test_logloss)
+                test_err.append(this_test_logloss)
                 n_iter.append(iter + 1)
+
                 # if we got the best validation score until now
                 if this_test_logloss < best_test_logloss:
 
@@ -514,31 +570,31 @@ def evaluate_lenet5(learning_rate=0.1, n_epochs=29,
 
     ### Predicting
     ###
-    res = []
-    print(test_x.shape)
-    parts = numpy.array_split(test_x, 4)
-    test_x_part = theano.shared(parts[0], borrow=True)
-    predict = theano.function(
-        [index],
-        layer3.predict_proba(),
-        givens={
-            x: test_x_part[index * batch_size: (index + 1) * batch_size],
-            },
-    )
-    for part in parts:
-        test_x_part.set_value(part, borrow=True)
-        n_part_batches = part.shape[0] / batch_size
-        for minibatch_index in xrange(n_part_batches):
-            tmp = predict(minibatch_index)
-            res.append(tmp)
-    result = numpy.vstack(tuple(res))
-    print(result.shape)
-    dsl.save_submission(result, '1')
+    # res = []
+    # print(test_x.shape)
+    # parts = numpy.array_split(test_x, 4)
+    # test_x_part = theano.shared(parts[0], borrow=True)
+    # predict = theano.function(
+    #     [index],
+    #     layer3.predict_proba(),
+    #     givens={
+    #         x: test_x_part[index * batch_size: (index + 1) * batch_size],
+    #         },
+    # )
+    # for part in parts:
+    #     test_x_part.set_value(part, borrow=True)
+    #     n_part_batches = part.shape[0] / batch_size
+    #     for minibatch_index in xrange(n_part_batches):
+    #         tmp = predict(minibatch_index)
+    #         res.append(tmp)
+    # result = numpy.vstack(tuple(res))
+    # print(result.shape)
+    # dsl.save_submission(result, '1')
 
 
     #print("Saving: %s %s %s" % (n_iter, test_err, train_err))
-    #results = numpy.array(zip(n_iter, test_err, train_err), dtype=numpy.float)
-    #numpy.save("data/tidy/relu_errors.npy", results)
+    results = numpy.array([n_iter, test_err, train_err], dtype=numpy.float)
+    numpy.save("data/tidy/relu_errors.npy", results)
 
 if __name__ == '__main__':
     evaluate_lenet5()
