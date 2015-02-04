@@ -3,18 +3,17 @@ __author__ = 'dudevil'
 import os
 import sys
 import time
-
 import numpy
-
 import theano
 import theano.tensor as T
 from theano.tensor.signal import downsample
 from theano.tensor.nnet import conv
-from sklearn.cross_validation import StratifiedShuffleSplit
+from theano.tensor.shared_randomstreams import RandomStreams
 from read_data import DataSetLoader
 
+
 def relu(x):
-    return x * (x > 0)
+    return T.maximum(x, 0)
 
 class HiddenLayer(object):
     def __init__(self, rng, input, n_in, n_out, W=None, b=None,
@@ -87,6 +86,7 @@ class HiddenLayer(object):
         )
         # parameters of the model
         self.params = [self.W, self.b]
+        self.bias_params = [self.b]
 
 
 class LogisticRegression(object):
@@ -151,6 +151,7 @@ class LogisticRegression(object):
 
         # parameters of the model
         self.params = [self.W, self.b]
+        self.bias_params = [self.b]
 
     def negative_log_likelihood(self, y):
         """Return the mean of the negative log-likelihood of the prediction
@@ -252,7 +253,7 @@ class LeNetConvPoolLayer(object):
         W_bound = numpy.sqrt(6. / (fan_in + fan_out))
         self.W = theano.shared(
             numpy.asarray(
-                rng.uniform(low=-W_bound, high=W_bound, size=filter_shape),
+                rng.normal(loc=0.0, scale=0.01, size=filter_shape),
                 dtype=theano.config.floatX
             ),
             borrow=True
@@ -285,10 +286,80 @@ class LeNetConvPoolLayer(object):
 
         # store parameters of this layer
         self.params = [self.W, self.b]
+        self.bias_params = [self.b]
 
 
-def evaluate_lenet5(learning_rate=0.1, n_epochs=29,
-                    nkerns=[20, 50], batch_size=200):
+class DropOutLayer(object):
+
+    def __init__(self, rng, input, input_shape, active, rate=0.5):
+        rstream = RandomStreams(seed=rng.randint(9999))
+        if active.get_value(borrow=True):
+            # enable dropout for training
+            mask = T.cast(rstream.binomial(n=1, p=rate, size=input_shape),
+                          theano.config.floatX)
+            theano.printing.Print("Dropout mask mean: " % mask.mean())
+            self.output = input * mask
+        else:
+            theano.printing.Print("No dropout")
+            # disable dropout for prediction
+            self.output = input
+
+def dropout(rng, input, input_shape, active, rate=0.5):
+        rstream = RandomStreams(seed=rng.randint(9999))
+        mask = T.cast(rstream.binomial(n=1, p=rate, size=input_shape),
+                          theano.config.floatX)
+
+        out = T.switch(active, mask * input / rate, input)
+        return out
+
+def gen_updates_regular_momentum(loss, all_parameters, learning_rate, momentum, weight_decay=0.0):
+    all_grads = [theano.grad(loss, param) for param in all_parameters]
+    updates = []
+    for param_i, grad_i in zip(all_parameters, all_grads):
+        mparam_i = theano.shared(param_i.get_value()*0.)
+        v = momentum * mparam_i - weight_decay * learning_rate * param_i - learning_rate * grad_i
+        updates.append((mparam_i, v))
+        updates.append((param_i, param_i + v))
+    return updates
+
+def gen_updates_nesterov_momentum(loss, all_parameters, learning_rate, momentum, weight_decay=0.0):
+    all_grads = [theano.grad(loss, param) for param in all_parameters]
+    updates = []
+    for param_i, grad_i in zip(all_parameters, all_grads):
+        mparam_i = theano.shared(param_i.get_value()*0.)
+        full_grad = grad_i + weight_decay * param_i
+        v = momentum * mparam_i - learning_rate * full_grad # new momemtum
+        w = param_i + momentum * v - learning_rate * full_grad # new parameter values
+        updates.append((mparam_i, v))
+        updates.append((param_i, w))
+    return updates
+
+def gen_updates_nesterov_momentum_no_bias_decay(loss,
+                                                all_parameters,
+                                                all_bias_parameters,
+                                                learning_rate,
+                                                momentum,
+                                                weight_decay=0.0):
+    """
+    Nesterov momentum, but excluding the biases from the weight decay.
+    """
+    all_grads = [theano.grad(loss, param) for param in all_parameters]
+    updates = []
+    for param_i, grad_i in zip(all_parameters, all_grads):
+        mparam_i = theano.shared(param_i.get_value()*0.)
+        if param_i in all_bias_parameters:
+            full_grad = grad_i
+        else:
+            full_grad = grad_i + weight_decay * param_i
+        v = momentum * mparam_i - learning_rate * full_grad # new momemtum
+        w = param_i + momentum * v - learning_rate * full_grad # new parameter values
+        updates.append((mparam_i, v))
+        updates.append((param_i, w))
+    return updates
+
+
+def evaluate_lenet5(learning_rate=0.004, n_epochs=200,
+                    nkerns=[32, 64], batch_size=200):
     """ Demonstrates lenet on MNIST dataset
 
     :type learning_rate: float
@@ -305,18 +376,21 @@ def evaluate_lenet5(learning_rate=0.1, n_epochs=29,
     :param nkerns: number of kernels on each layer
     """
 
-    rng = numpy.random.RandomState(23455)
+    rng = numpy.random.RandomState(4022015)
 
     # load data and split train/test set stratified by classes
-    dsl = DataSetLoader()
-    train_x, valid_x, train_y, valid_y = dsl.train_test_split(random_state=rng)
-    test_x = dsl.load_test()
+    dsl = DataSetLoader(rng=rng)
+    train_gen = dsl.train_gen()
+    valid_gen = dsl.valid_gen()
+    train_x, train_y = train_gen.next()
+    valid_x, valid_y = valid_gen.next()
+    #test_x = dsl.load_test()
 
     train_xx = train_x # tmp
     # compute number of minibatches for training, validation and testing
     n_train_batches = train_x.shape[0] / batch_size
     n_val_batches = valid_x.shape[0] / batch_size
-    n_test_batches = test_x.shape[0] / batch_size
+    #n_test_batches = test_x.shape[0] / batch_size
 
     train_x = theano.shared(train_x, borrow=True)
     valid_x = theano.shared(valid_x, borrow=True)
@@ -329,6 +403,7 @@ def evaluate_lenet5(learning_rate=0.1, n_epochs=29,
     index = T.lscalar()  # index to a [mini]batch
     x = T.matrix('x')   # the data is presented as rasterized images
     y = T.ivector('y')  # the labels are presented as 1D vector of [int] labels
+    dropout_active = T.bscalar('dropout_active')  # a flag to enable and disable dropout
 
     ######################
     # BUILD ACTUAL MODEL #
@@ -375,50 +450,82 @@ def evaluate_lenet5(learning_rate=0.1, n_epochs=29,
         input=layer2_input,
         n_in=nkerns[1] * 9 * 9,
         n_out=500,
-        activation=T.tanh
+        activation=relu
     )
 
+    # layer3 = DropOutLayer(
+    #     rng,
+    #     input=layer2.output,
+    #     input_shape=500,
+    #     active=dropout_active
+    # )
+
+    layer4_input = dropout(rng, layer2.output, (500,), dropout_active)
+
+    layer4 = HiddenLayer(
+        rng,
+        input=layer4_input,
+        n_in=500,
+        n_out=500,
+        activation=relu
+    )
+    #
+    # layer5 = DropOutLayer(
+    #     rng,
+    #     input=layer4.output,
+    #     input_shape=500,
+    #     active=dropout_active
+    # )
+
+    layer6_input = dropout(rng, layer4.output, (500,), dropout_active)
     # classify the values of the fully-connected sigmoidal layer
-    layer3 = LogisticRegression(input=layer2.output, n_in=500, n_out=121)
+    layer6 = LogisticRegression(input=layer6_input, n_in=500, n_out=121)
 
     # the cost we minimize during training is the NLL of the model
-    cost = layer3.negative_log_likelihood(y)
+    cost = layer6.negative_log_likelihood(y)
 
     # create a function to compute the mistakes that are made by the model
     test_model = theano.function(
         [index],
-        layer3.errors(y),
+        layer6.errors(y),
         givens={
             x: valid_x[index * batch_size: (index + 1) * batch_size],
-            y: valid_y[index * batch_size: (index + 1) * batch_size]
+            y: valid_y[index * batch_size: (index + 1) * batch_size],
+            dropout_active: theano.shared(numpy.array(0, dtype='int8'), borrow=False),
         }
     )
 
     test_logloss = theano.function(
         [index],
-        layer3.negative_log_likelihood(y),
+        layer6.negative_log_likelihood(y),
         givens={
             x: valid_x[index * batch_size: (index + 1) * batch_size],
-            y: valid_y[index * batch_size: (index + 1) * batch_size]
+            y: valid_y[index * batch_size: (index + 1) * batch_size],
+            dropout_active: theano.shared(numpy.array(0, dtype='int8'), borrow=False)
         }
     )
 
 
     # create a list of all model parameters to be fit by gradient descent
-    params = layer3.params + layer2.params + layer1.params + layer0.params
-
+    params = layer6.params + layer4.params + layer2.params + layer1.params + layer0.params
+    bias_params = layer6.bias_params + layer4.bias_params + layer2.bias_params + layer1.bias_params + layer0.bias_params
     # create a list of gradients for all model parameters
-    grads = T.grad(cost, params)
+    #grads = T.grad(cost, params)
 
     # train_model is a function that updates the model parameters by
     # SGD Since this model has many parameters, it would be tedious to
     # manually create an update rule for each model parameter. We thus
     # create the updates list by automatically looping over all
     # (params[i], grads[i]) pairs.
-    updates = [
-        (param_i, param_i - learning_rate * grad_i)
-        for param_i, grad_i in zip(params, grads)
-    ]
+    # updates = [
+    #     (param_i, param_i - learning_rate * grad_i)
+    #     for param_i, grad_i in zip(params, grads)
+    # ]
+
+    updates = gen_updates_nesterov_momentum_no_bias_decay(cost, params,
+                                                          bias_params,
+                                                          learning_rate=learning_rate,
+                                                          momentum=0.9)
 
     train_model = theano.function(
         [index],
@@ -426,7 +533,8 @@ def evaluate_lenet5(learning_rate=0.1, n_epochs=29,
         updates=updates,
         givens={
             x: train_x[index * batch_size: (index + 1) * batch_size],
-            y: train_y[index * batch_size: (index + 1) * batch_size]
+            y: train_y[index * batch_size: (index + 1) * batch_size],
+            dropout_active: theano.shared(numpy.array(1, dtype='int8'), borrow=False)
         }
     )
 
@@ -477,9 +585,9 @@ def evaluate_lenet5(learning_rate=0.1, n_epochs=29,
                                      in xrange(n_val_batches)]
                 this_test_loss = numpy.mean(test_losses)
                 this_test_logloss = numpy.mean(test_loglosses)
-                print('epoch %i, minibatch %i/%i, validation error %.2f loglikelihood %f %%' %
+                print('epoch %i, minibatch %i/%i, validation error %.2f %% loglikelihood %f train error %f' %
                       (epoch, minibatch_index + 1, n_train_batches,
-                       this_test_loss * 100., this_test_logloss))
+                       this_test_loss * 100., this_test_logloss, cost_ij))
 
                 # save for later analysis
                 train_err.append(cost_ij)
@@ -502,6 +610,9 @@ def evaluate_lenet5(learning_rate=0.1, n_epochs=29,
             if patience <= iter:
                 done_looping = True
                 break
+        nx, ny = train_gen.next()
+        train_x.set_value(nx, borrow=True)
+        train_y.set_value(ny, borrow=True)
 
     end_time = time.clock()
     print('Optimization complete.')
@@ -514,26 +625,26 @@ def evaluate_lenet5(learning_rate=0.1, n_epochs=29,
 
     ### Predicting
     ###
-    res = []
-    print(test_x.shape)
-    parts = numpy.array_split(test_x, 4)
-    test_x_part = theano.shared(parts[0], borrow=True)
-    predict = theano.function(
-        [index],
-        layer3.predict_proba(),
-        givens={
-            x: test_x_part[index * batch_size: (index + 1) * batch_size],
-            },
-    )
-    for part in parts:
-        test_x_part.set_value(part, borrow=True)
-        n_part_batches = part.shape[0] / batch_size
-        for minibatch_index in xrange(n_part_batches):
-            tmp = predict(minibatch_index)
-            res.append(tmp)
-    result = numpy.vstack(tuple(res))
-    print(result.shape)
-    dsl.save_submission(result, '1')
+    # res = []
+    # print(test_x.shape)
+    # parts = numpy.array_split(test_x, 4)
+    # test_x_part = theano.shared(parts[0], borrow=True)
+    # predict = theano.function(
+    #     [index],
+    #     layer3.predict_proba(),
+    #     givens={
+    #         x: test_x_part[index * batch_size: (index + 1) * batch_size],
+    #         },
+    # )
+    # for part in parts:
+    #     test_x_part.set_value(part, borrow=True)
+    #     n_part_batches = part.shape[0] / batch_size
+    #     for minibatch_index in xrange(n_part_batches):
+    #         tmp = predict(minibatch_index)
+    #         res.append(tmp)
+    # result = numpy.vstack(tuple(res))
+    # print(result.shape)
+    # dsl.save_submission(result, '1')
 
 
     #print("Saving: %s %s %s" % (n_iter, test_err, train_err))

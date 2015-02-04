@@ -2,17 +2,20 @@ __author__ = 'dudevil'
 
 import os
 import glob
-import json
+import cPickle
+import functools
 import numpy as np
 import pandas as pd
 from skimage.io import imread
 from skimage.transform import resize
 from sklearn.cross_validation import StratifiedShuffleSplit
+from augmentation import transform
+
 
 
 class DataSetLoader:
 
-    def __init__(self, data_dir="data", img_size=48):
+    def __init__(self, data_dir="data", img_size=48, rng=np.random.RandomState(123)):
         self.data_dir = data_dir
         self.class_labels = {}
         self._num_label = 0
@@ -20,9 +23,75 @@ class DataSetLoader:
         self.train_file = os.path.join("data", "tidy", "train_%d.npy" % img_size)
         self.trainlabels_file = os.path.join("data", "tidy", "train_labels_%d.npy" % img_size)
         self.test_file = os.path.join("data", "tidy", "test_%d.npy" % img_size)
+        self.vanilla_file = os.path.join("data", "tidy", "vtrain_%d.npy" % img_size)
+        self.vanillalabels_file = os.path.join("data", "tidy", "vtrain_labels_%d.npy" % img_size)
+        self.mapfile = os.path.join("data", "tidy", "train_labmapping.pkl")
+        self.trainfile = os.path.join("data", "tidy", "train.pkl")
         self.n_testimages = 130400
         # filenames in the testset order
         self.testfilenames = []
+        self.rng = rng
+        X, y = self.load_images()
+        self.X_train, self.X_valid, self.y_train, self.y_valid = self.train_test_split(X, y)
+
+
+
+    def load_images(self):
+        # get cached data
+        if os.path.isfile(self.trainfile) and os.path.isfile(self.mapfile):
+            with open(self.mapfile, 'r') as lfile:
+                self.class_labels = cPickle.load(lfile)
+            with open(self.trainfile, 'r') as tfile:
+                images, y = cPickle.load(tfile)
+            return pd.Series(images), np.array(y, dtype='int32')
+        images = []
+        y = []
+        for directory in sorted(glob.iglob(os.path.join(self.data_dir, "train", "*"))):
+            print("processing %s" % directory)
+            files = os.listdir(directory)
+            n_images = len(files)
+            # the last directory is a class label
+            self.class_labels[self._num_label] = os.path.split(directory)[-1]
+            # create labels list
+            y.extend([self._num_label] * n_images)
+            self._num_label += 1
+            for i, image in enumerate(files):
+                images.append(imread(os.path.join(directory, image), as_grey=True))
+        with open(self.mapfile, 'w') as lfile:
+            cPickle.dump(self.class_labels, lfile)
+        with open(self.trainfile, 'w') as tfile:
+            cPickle.dump((images, y), tfile)
+        return pd.Series(images), np.array(y, dtype='int32')
+
+    def train_gen(self):
+        assert len(self.X_train) == len(self.y_train)
+        n_samples = len(self.X_train)
+        xs = np.zeros((n_samples, self.img_size * self.img_size), dtype='float32')
+        # yield train set permutations indefinately
+        while True:
+            #transform the training set
+            # xs = np.vstack(tuple(
+            #      map(functools.partial(transform,
+            #                            rng=self.rng,
+            #                            image_size=(self.img_size, self.img_size)),
+            #          self.X_train)))
+            xs = np.vstack(tuple([x.reshape(1,-1) for x in
+                map(functools.partial(resize, output_shape=(self.img_size, self.img_size)),
+                    self.X_train)]))
+            shuff_ind = self.rng.permutation(n_samples)
+            yield xs[shuff_ind].astype('float32'), self.y_train[shuff_ind]
+
+    def valid_gen(self):
+        # will return same shuffled images
+        while True:
+            xs = np.vstack(tuple([x.reshape(1,-1) for x in
+                map(functools.partial(resize, output_shape=(self.img_size, self.img_size)),
+                    self.X_valid)]))
+            shuff_ind = self.rng.permutation(len(self.X_valid))
+            yield xs[shuff_ind].astype('float32'), self.y_valid[shuff_ind]
+
+
+
 
     def load_train(self):
         # check if a dataset with the given image size has already been processed
@@ -56,8 +125,7 @@ class DataSetLoader:
         np.save(self.train_file, x)
         np.save(self.trainlabels_file, y)
         # also save label to index mapping
-        with open(os.path.join("data", "tidy", "train_%d_labmapping.npy" % self.img_size), 'w') as lfile:
-            json.dump(self.class_labels, lfile, indent=2)
+
         return x, y
 
     def load_test(self):
@@ -77,9 +145,8 @@ class DataSetLoader:
         np.save(self.test_file, images)
         return images
 
-    def train_test_split(self, test_size=0.1, random_state=0):
-        X, y = self.load_train()
-        sss = StratifiedShuffleSplit(y, n_iter=1, random_state=random_state, test_size=test_size)
+    def train_test_split(self, X, y, test_size=0.1):
+        sss = StratifiedShuffleSplit(y, n_iter=1, random_state=self.rng, test_size=test_size)
         # we only split once so do not use iter, just convert to list and get first split
         train, test = list(sss).pop()
         return X[train], X[test], y[train], y[test]

@@ -3,3 +3,4 @@
 train/
 test/
 *.npy
+*.pkl
