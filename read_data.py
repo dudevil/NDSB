@@ -1,4 +1,13 @@
 __author__ = 'dudevil'
+"""
+This module provides an utility class to load images from the training and test sets.
+Provides methods for train-validation stratified split.
+
+train_gen and valid_gen methods create a python generator indefinetaly yielding train/ and validation set.
+
+For now only shuffling is performed on the train and validation sets.
+"""
+
 
 import os
 import glob
@@ -9,8 +18,6 @@ import pandas as pd
 from skimage.io import imread
 from skimage.transform import resize
 from sklearn.cross_validation import StratifiedShuffleSplit
-
-
 
 
 class DataSetLoader:
@@ -34,8 +41,6 @@ class DataSetLoader:
         X, y = self.load_images()
         self.X_train, self.X_valid, self.y_train, self.y_valid = self.train_test_split(X, y)
 
-
-
     def load_images(self):
         # get cached data
         if os.path.isfile(self.trainfile) and os.path.isfile(self.mapfile):
@@ -57,6 +62,7 @@ class DataSetLoader:
             self._num_label += 1
             for i, image in enumerate(files):
                 images.append(imread(os.path.join(directory, image), as_grey=True))
+        # cache images as array for future use
         with open(self.mapfile, 'w') as lfile:
             cPickle.dump(self.class_labels, lfile)
         with open(self.trainfile, 'w') as tfile:
