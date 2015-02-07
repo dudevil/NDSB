@@ -40,6 +40,10 @@ class DataSetLoader:
         self.rng = rng
         X, y = self.load_images()
         self.X_train, self.X_valid, self.y_train, self.y_valid = self.train_test_split(X, y)
+        self.resize_f = functools.partial(resize, output_shape=(self.img_size, self.img_size))
+        self.X_train_resized = np.vstack(tuple([x.reshape(1, -1) for x in
+                                                map(self.resize_f, self.X_train)]))
+
 
     def load_images(self):
         # get cached data
@@ -72,20 +76,18 @@ class DataSetLoader:
     def train_gen(self):
         assert len(self.X_train) == len(self.y_train)
         n_samples = len(self.X_train)
-        xs = np.zeros((n_samples, self.img_size * self.img_size), dtype='float32')
+        # xs = np.zeros((n_samples, self.img_size * self.img_size), dtype='float32')
         # yield train set permutations indefinately
         while True:
+            shuff_ind = self.rng.permutation(n_samples)
+            yield self.X_train_resized[shuff_ind].astype('float32'), self.y_train[shuff_ind]
             #transform the training set
             # xs = np.vstack(tuple(
             #      map(functools.partial(transform,
             #                            rng=self.rng,
             #                            image_size=(self.img_size, self.img_size)),
             #          self.X_train)))
-            xs = np.vstack(tuple([x.reshape(1,-1) for x in
-                map(functools.partial(resize, output_shape=(self.img_size, self.img_size)),
-                    self.X_train)]))
-            shuff_ind = self.rng.permutation(n_samples)
-            yield xs[shuff_ind].astype('float32'), self.y_train[shuff_ind]
+
 
     def valid_gen(self):
         # will return same shuffled images
