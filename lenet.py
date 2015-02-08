@@ -386,23 +386,23 @@ def gen_updates_nesterov_momentum_no_bias_decay(loss,
     return updates
 
 learning_rate_schedule = {
-    0: 0.004,
-    100: 0.0008,
-    400: 0.0001
+    0: 0.001,
+    400: 0.0005,
+    700: 0.0001
 }
 
 momentum_schedule = {
-    40: 0.95,
-    400: 0.99
+    0: 0.95,
+    400: 0.99,
+    700: 0.95
 }
 
-def evaluate_lenet5(learning_rate=0.001, momentum=0.95,  n_epochs=400,
-                    nkerns=[32, 64, 128], batch_size=256):
+def evaluate_lenet5(n_epochs=500, nkerns=[32, 64, 128], batch_size=256):
     """ Demonstrates lenet on MNIST dataset
     Build train and evaluate model
     """
 
-    rng = numpy.random.RandomState(702215)
+    rng = numpy.random.RandomState(72215)
 
     # load data and split train/test set stratified by classes
     dsl = DataSetLoader(rng=rng, img_size=48)
@@ -425,16 +425,14 @@ def evaluate_lenet5(learning_rate=0.001, momentum=0.95,  n_epochs=400,
     valid_y = T.cast(theano.shared(valid_y, borrow=True), dtype='int32')
 
     # allocate learning rate and momentum shared variables
-    #l_rate = T.cast(theano.shared(learning_rate), dtype=theano.config.floatX)
-    #moment = T.cast(theano.shared(momentum), dtype=theano.config.floatX)
+    learning_rate = theano.shared(numpy.array(0.01, dtype=theano.config.floatX))
+    momentum = theano.shared(numpy.array(0.95, dtype=theano.config.floatX))
 
     # allocate symbolic variables for the data
     index = T.lscalar()  # index to a [mini]batch
     x = T.matrix('x')   # the data is presented as rasterized images
     y = T.ivector('y')  # the labels are presented as 1D vector of [int] labels
     dropout_active = T.bscalar('dropout_active')  # a flag to enable and disable dropout
-    #learning_rate = T.fscalar('learning_rate')
-    #momentum = T.fscalar('momentum')
 
 
 
@@ -464,8 +462,8 @@ def evaluate_lenet5(learning_rate=0.001, momentum=0.95,  n_epochs=400,
     # filtering reduces the image size to (22-5+1, 22-5+1) = (18, 18)
     # maxpooling reduces this further to (18/2, 18/2) = (9, 9)
     # 4D output tensor is thus of shape (batch_size, nkerns[1], 14, 14)
-    #layer1_input = dropout(rng, layer0.output, (batch_size, nkerns[0], 22, 22), dropout_active, rate=0.25)
-    layer1_input = layer0.output
+    layer1_input = dropout(rng, layer0.output, (batch_size, nkerns[0], 22, 22), dropout_active, rate=0.1)
+    #layer1_input = layer0.output
     layer1 = LeNetConvPoolLayer(
         rng,
         input=layer1_input,
@@ -477,8 +475,8 @@ def evaluate_lenet5(learning_rate=0.001, momentum=0.95,  n_epochs=400,
     # Construct the second convolutional pooling layer
     # filtering reduces the image size to (9-2+1, 9-2+1) = (8, 8)
     # maxpooling reduces this further to (8/2, 8/2) = (4, 4)
-    #layer2_input = dropout(rng, layer1.output, (batch_size, nkerns[1], 9, 9), dropout_active, rate=0.25)
-    layer2_input = layer1.output
+    layer2_input = dropout(rng, layer1.output, (batch_size, nkerns[1], 9, 9), dropout_active, rate=0.1)
+    #layer2_input = layer1.output
     layer2 = LeNetConvPoolLayer(
         rng,
         input=layer2_input,
@@ -499,18 +497,18 @@ def evaluate_lenet5(learning_rate=0.001, momentum=0.95,  n_epochs=400,
         input=layer3_input,
         n_in=nkerns[2] * 4 * 4,
         n_out=1024,
-        activation=relu
+        activation=None
     )
 
     # Maxout layer reduces output dimension to (batch_size, input_dim / pool_size)
     # in this case: (batch_size, 512/2) = (batch_size, 256)
-    # maxlayer1 = MaxOutLayer(
-    #     input=layer2.output,
-    #     input_shape=(batch_size, 1024),
-    #     pool_size=2
-    # )
+    maxlayer1 = MaxOutLayer(
+         input=layer3.output,
+         input_shape=(batch_size, 1024),
+         pool_size=2
+    )
     # add dropout at 0.5 rate
-    layer4_input = dropout(rng, layer3.output, (batch_size, 1024), dropout_active)
+    layer4_input = dropout(rng, maxlayer1.output, (batch_size, 512), dropout_active)
 
     # Maxout layer reduces output dimension to (batch_size, input_dim / pool_size)
     # in this case: (batch_size, 512/2) = (batch_size, 256)
@@ -518,22 +516,22 @@ def evaluate_lenet5(learning_rate=0.001, momentum=0.95,  n_epochs=400,
     layer4 = HiddenLayer(
         rng,
         input=layer4_input,
-        n_in=1024,
+        n_in=512,
         n_out=1024,
-        activation=relu,
+        activation=None,
     )
     # Maxout layer reduces output dimension to (batch_size, input_dim / pool_size)
     # in this case: (batch_size, 512/2) = (batch_size, 256)
-    # maxlayer2 = MaxOutLayer(
-    #     input=layer4.output,
-    #     input_shape=(batch_size, 1024),
-    #     pool_size=2
-    # )
+    maxlayer2 = MaxOutLayer(
+        input=layer4.output,
+        input_shape=(batch_size, 1024),
+        pool_size=2
+    )
 
     # add dropout at 0.5 rate
-    layer6_input = dropout(rng, layer4.output, (batch_size, 1024), dropout_active)
+    layer6_input = dropout(rng, maxlayer2.output, (batch_size, 512), dropout_active)
     # classify the values of the fully-connected sigmoidal layer
-    layer6 = LogisticRegression(input=layer6_input, n_in=1024, n_out=121)
+    layer6 = LogisticRegression(input=layer6_input, n_in=512, n_out=121)
 
     # the cost we minimize during training is the NLL of the model
     cost = layer6.negative_log_likelihood(y)
@@ -639,9 +637,9 @@ def evaluate_lenet5(learning_rate=0.001, momentum=0.95,  n_epochs=400,
 
             # update learning rate and momentum according to schedule
             # if epoch in learning_rate_schedule:
-            #     l_rate.set_value(learning_rate_schedule[epoch])
+            #      learning_rate.set_value(numpy.array(learning_rate_schedule[epoch], dtype=theano.config.floatX))
             # if epoch in momentum_schedule:
-            #     moment.set_value(momentum_schedule[epoch])
+            #      momentum.set_value(numpy.array(momentum_schedule[epoch], dtype=theano.config.floatX))
 
             if (iter + 1) % validation_frequency == 0:
 
@@ -717,7 +715,7 @@ def evaluate_lenet5(learning_rate=0.001, momentum=0.95,  n_epochs=400,
 
     # save train and validation errors
     results = numpy.array([n_iter, test_err, valid_err], dtype=numpy.float)
-    numpy.save("data/tidy/3convlay_relu_errors.npy", results)
+    numpy.save("data/tidy/maxout1024_convdropout01_errors.npy", results)
 
 if __name__ == '__main__':
     evaluate_lenet5()
