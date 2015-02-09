@@ -26,7 +26,7 @@ def relu(x):
 
 class HiddenLayer(object):
     def __init__(self, rng, input, n_in, n_out, W=None, b=None,
-                 activation=relu):
+                 activation=relu, max_col_norm=0.0):
         """
         Typical hidden layer of a MLP: units are fully-connected and have
         sigmoidal activation function. Weight matrix W is of shape (n_in,n_out)
@@ -91,10 +91,27 @@ class HiddenLayer(object):
             lin_output if activation is None
             else activation(lin_output)
         )
-
+        # set up max-norm regularization
+        self.max_col_norm = max_col_norm
         # parameters of the model
         self.params = [self.W, self.b]
         self.bias_params = [self.b]
+
+    def censor_updates(self, updates):
+        """
+        When applied to the updates dictionary this function causes the weights to stay
+        in a sphere with radius self.max_col_norm
+        :param updates:
+        :return:
+        """
+        W = self.W
+        if W in updates and self.max_col_norm:
+            updated_W = updates[W]
+            col_norms = T.sqrt(T.sum(T.sqr(updated_W), axis=0))
+            desired_norms = T.clip(col_norms, 0, self.max_col_norm)
+            constrained_W = updated_W * (desired_norms / (1e-7 + col_norms))
+            updates[W] = constrained_W
+
 
 
 class LogisticRegression(object):
@@ -402,7 +419,7 @@ def evaluate_lenet5(n_epochs=500, nkerns=[32, 64, 128], batch_size=256):
     Build train and evaluate model
     """
 
-    rng = numpy.random.RandomState(72215)
+    rng = numpy.random.RandomState(922015)
 
     # load data and split train/test set stratified by classes
     dsl = DataSetLoader(rng=rng, img_size=48)
@@ -425,7 +442,7 @@ def evaluate_lenet5(n_epochs=500, nkerns=[32, 64, 128], batch_size=256):
     valid_y = T.cast(theano.shared(valid_y, borrow=True), dtype='int32')
 
     # allocate learning rate and momentum shared variables
-    learning_rate = theano.shared(numpy.array(0.01, dtype=theano.config.floatX))
+    learning_rate = theano.shared(numpy.array(0.001, dtype=theano.config.floatX))
     momentum = theano.shared(numpy.array(0.95, dtype=theano.config.floatX))
 
     # allocate symbolic variables for the data
@@ -462,8 +479,8 @@ def evaluate_lenet5(n_epochs=500, nkerns=[32, 64, 128], batch_size=256):
     # filtering reduces the image size to (22-5+1, 22-5+1) = (18, 18)
     # maxpooling reduces this further to (18/2, 18/2) = (9, 9)
     # 4D output tensor is thus of shape (batch_size, nkerns[1], 14, 14)
-    layer1_input = dropout(rng, layer0.output, (batch_size, nkerns[0], 22, 22), dropout_active, rate=0.1)
-    #layer1_input = layer0.output
+    #layer1_input = dropout(rng, layer0.output, (batch_size, nkerns[0], 22, 22), dropout_active, rate=0.1)
+    layer1_input = layer0.output
     layer1 = LeNetConvPoolLayer(
         rng,
         input=layer1_input,
@@ -475,8 +492,8 @@ def evaluate_lenet5(n_epochs=500, nkerns=[32, 64, 128], batch_size=256):
     # Construct the second convolutional pooling layer
     # filtering reduces the image size to (9-2+1, 9-2+1) = (8, 8)
     # maxpooling reduces this further to (8/2, 8/2) = (4, 4)
-    layer2_input = dropout(rng, layer1.output, (batch_size, nkerns[1], 9, 9), dropout_active, rate=0.1)
-    #layer2_input = layer1.output
+    #layer2_input = dropout(rng, layer1.output, (batch_size, nkerns[1], 9, 9), dropout_active, rate=0.1)
+    layer2_input = layer1.output
     layer2 = LeNetConvPoolLayer(
         rng,
         input=layer2_input,
@@ -489,7 +506,7 @@ def evaluate_lenet5(n_epochs=500, nkerns=[32, 64, 128], batch_size=256):
     # the HiddenLayer being fully-connected, it operates on 2D matrices of
     # shape (batch_size, num_pixels) (i.e matrix of rasterized images).
     # This will generate a matrix of shape (batch_size, nkerns[2] * 5 * 5),
-    # layer2_input = layer1.output.flatten(2)
+
     layer3_input = dropout(rng, layer2.output.flatten(2), (batch_size, nkerns[2] * 4 * 4), dropout_active)
     # construct a fully-connected relu layer
     layer3 = HiddenLayer(
@@ -497,7 +514,8 @@ def evaluate_lenet5(n_epochs=500, nkerns=[32, 64, 128], batch_size=256):
         input=layer3_input,
         n_in=nkerns[2] * 4 * 4,
         n_out=1024,
-        activation=None
+        activation=None,
+        max_col_norm=2.
     )
 
     # Maxout layer reduces output dimension to (batch_size, input_dim / pool_size)
@@ -519,6 +537,7 @@ def evaluate_lenet5(n_epochs=500, nkerns=[32, 64, 128], batch_size=256):
         n_in=512,
         n_out=1024,
         activation=None,
+        max_col_norm=2.
     )
     # Maxout layer reduces output dimension to (batch_size, input_dim / pool_size)
     # in this case: (batch_size, 512/2) = (batch_size, 256)
@@ -583,6 +602,10 @@ def evaluate_lenet5(n_epochs=500, nkerns=[32, 64, 128], batch_size=256):
                                                           bias_params,
                                                           learning_rate=learning_rate,
                                                           momentum=momentum)
+
+    # apply max-norm regularization
+    layer3.censor_updates(updates)
+    layer4.censor_updates(updates)
 
     # create a function to train the neural network
     train_model = theano.function(
@@ -653,6 +676,9 @@ def evaluate_lenet5(n_epochs=500, nkerns=[32, 64, 128], batch_size=256):
                 print('epoch %i, minibatch %i/%i, validation error %.2f %% loglikelihood %f train error %f' %
                       (epoch, minibatch_index + 1, n_train_batches,
                        this_test_loss * 100., this_test_logloss, cost_ij))
+                print('Max weight in dense layers 1: %f 2: %f' %
+                      (numpy.max(numpy.sqrt(numpy.sum(numpy.square(layer3.W.get_value(borrow=True)), axis=0))),
+                       numpy.max(numpy.sqrt(numpy.sum(numpy.square(layer4.W.get_value(borrow=True)), axis=0)))))
 
                 # save for later analysis
                 valid_err.append(cost_ij)
@@ -715,7 +741,7 @@ def evaluate_lenet5(n_epochs=500, nkerns=[32, 64, 128], batch_size=256):
 
     # save train and validation errors
     results = numpy.array([n_iter, test_err, valid_err], dtype=numpy.float)
-    numpy.save("data/tidy/maxout1024_convdropout01_errors.npy", results)
+    numpy.save("data/tidy/maxout1024_maxnorm20_errors.npy", results)
 
 if __name__ == '__main__':
     evaluate_lenet5()
