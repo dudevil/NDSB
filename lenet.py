@@ -423,7 +423,7 @@ def evaluate_lenet5(n_epochs=500, nkerns=[32, 64, 128], batch_size=256):
 
     # load data and split train/test set stratified by classes
     dsl = DataSetLoader(rng=rng, img_size=48)
-    train_gen = dsl.train_gen()
+    train_gen = dsl.train_gen(padded=True)
     valid_gen = dsl.valid_gen()
     train_x, train_y = train_gen.next()
     valid_x, valid_y = valid_gen.next()
@@ -604,8 +604,8 @@ def evaluate_lenet5(n_epochs=500, nkerns=[32, 64, 128], batch_size=256):
                                                           momentum=momentum)
 
     # apply max-norm regularization
-    layer3.censor_updates(updates)
-    layer4.censor_updates(updates)
+    # layer3.censor_updates(updates)
+    # layer4.censor_updates(updates)
 
     # create a function to train the neural network
     train_model = theano.function(
@@ -676,9 +676,9 @@ def evaluate_lenet5(n_epochs=500, nkerns=[32, 64, 128], batch_size=256):
                 print('epoch %i, minibatch %i/%i, validation error %.2f %% loglikelihood %f train error %f' %
                       (epoch, minibatch_index + 1, n_train_batches,
                        this_test_loss * 100., this_test_logloss, cost_ij))
-                print('Max weight in dense layers 1: %f 2: %f' %
-                      (numpy.max(numpy.sqrt(numpy.sum(numpy.square(layer3.W.get_value(borrow=True)), axis=0))),
-                       numpy.max(numpy.sqrt(numpy.sum(numpy.square(layer4.W.get_value(borrow=True)), axis=0)))))
+                # print('Max weight in dense layers 1: %f 2: %f' %
+                #       (numpy.max(numpy.sqrt(numpy.sum(numpy.square(layer3.W.get_value(borrow=True)), axis=0))),
+                #        numpy.max(numpy.sqrt(numpy.sum(numpy.square(layer4.W.get_value(borrow=True)), axis=0)))))
 
                 # save for later analysis
                 valid_err.append(cost_ij)
@@ -741,7 +741,7 @@ def evaluate_lenet5(n_epochs=500, nkerns=[32, 64, 128], batch_size=256):
 
     # save train and validation errors
     results = numpy.array([n_iter, test_err, valid_err], dtype=numpy.float)
-    numpy.save("data/tidy/maxout1024_maxnorm20_errors.npy", results)
+    numpy.save("data/tidy/maxout1024_padded.npy", results)
 
 if __name__ == '__main__':
     evaluate_lenet5()

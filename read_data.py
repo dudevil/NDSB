@@ -18,6 +18,7 @@ import pandas as pd
 from skimage.io import imread
 from skimage.transform import resize
 from sklearn.cross_validation import StratifiedShuffleSplit
+from augmentation import square
 
 
 class DataSetLoader:
@@ -43,6 +44,8 @@ class DataSetLoader:
         self.resize_f = functools.partial(resize, output_shape=(self.img_size, self.img_size))
         self.X_train_resized = np.vstack(tuple([x.reshape(1, -1) for x in
                                                 map(self.resize_f, self.X_train)]))
+        self.X_train_padded = np.vstack(tuple(map(square, self.X_train)))
+        self.X_valid_padded = np.vstack(tuple(map(square, self.X_valid)))
 
 
     def load_images(self):
@@ -73,14 +76,17 @@ class DataSetLoader:
             cPickle.dump((images, y), tfile)
         return pd.Series(images), np.array(y, dtype='int32')
 
-    def train_gen(self):
+    def train_gen(self, padded=False):
         assert len(self.X_train) == len(self.y_train)
         n_samples = len(self.X_train)
         # xs = np.zeros((n_samples, self.img_size * self.img_size), dtype='float32')
         # yield train set permutations indefinately
         while True:
             shuff_ind = self.rng.permutation(n_samples)
-            yield self.X_train_resized[shuff_ind].astype('float32'), self.y_train[shuff_ind]
+            if padded:
+                yield self.X_train_padded[shuff_ind].astype('float32'), self.y_train[shuff_ind]
+            else:
+                yield self.X_train_resized[shuff_ind].astype('float32'), self.y_train[shuff_ind]
             #transform the training set
             # xs = np.vstack(tuple(
             #      map(functools.partial(transform,
@@ -89,14 +95,17 @@ class DataSetLoader:
             #          self.X_train)))
 
 
-    def valid_gen(self):
+    def valid_gen(self, padded=False):
         # will return same shuffled images
         while True:
-            xs = np.vstack(tuple([x.reshape(1,-1) for x in
-                map(functools.partial(resize, output_shape=(self.img_size, self.img_size)),
-                    self.X_valid)]))
             shuff_ind = self.rng.permutation(len(self.X_valid))
-            yield xs[shuff_ind].astype('float32'), self.y_valid[shuff_ind]
+            if padded:
+                yield self.X_valid_padded[shuff_ind].astype('float32'), self.y_valid[shuff_ind]
+            else:
+                xs = np.vstack(tuple([x.reshape(1,-1) for x in
+                    map(functools.partial(resize, output_shape=(self.img_size, self.img_size)),
+                        self.X_valid)]))
+                yield xs[shuff_ind].astype('float32'), self.y_valid[shuff_ind]
 
 
 
