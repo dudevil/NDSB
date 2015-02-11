@@ -403,19 +403,19 @@ def gen_updates_nesterov_momentum_no_bias_decay(loss,
     return updates
 
 learning_rate_schedule = {
-    0: 0.01,
-    100: 0.005,
-    300: 0.001,
-    700: 0.0001
+    0: 0.02,
+    200: 0.01,
+    300: 0.007,
+    400: 0.005,
 }
 
 momentum_schedule = {
-    0: 0.95,
-    400: 0.99,
-    700: 0.95
+    0: 0.9,
+    400: 0.95,
+    700: 0.99
 }
 
-def evaluate_lenet5(n_epochs=400, nkerns=[32, 64, 128], batch_size=256):
+def evaluate_lenet5(n_epochs=500, nkerns=[32, 64, 128], batch_size=256):
     """ Demonstrates lenet on MNIST dataset
     Build train and evaluate model
     """
@@ -444,7 +444,7 @@ def evaluate_lenet5(n_epochs=400, nkerns=[32, 64, 128], batch_size=256):
 
     # allocate learning rate and momentum shared variables
     learning_rate = theano.shared(numpy.array(learning_rate_schedule[0], dtype=theano.config.floatX))
-    momentum = theano.shared(numpy.array(0.95, dtype=theano.config.floatX))
+    momentum = theano.shared(numpy.array(momentum_schedule[0], dtype=theano.config.floatX))
 
     # allocate symbolic variables for the data
     index = T.lscalar()  # index to a [mini]batch
@@ -514,7 +514,7 @@ def evaluate_lenet5(n_epochs=400, nkerns=[32, 64, 128], batch_size=256):
         rng,
         input=layer3_input,
         n_in=nkerns[2] * 4 * 4,
-        n_out=2048,
+        n_out=2560,
         activation=relu,
         max_col_norm=2.
     )
@@ -527,7 +527,7 @@ def evaluate_lenet5(n_epochs=400, nkerns=[32, 64, 128], batch_size=256):
     #      pool_size=2
     # )
     # add dropout at 0.5 rate
-    layer4_input = dropout(rng, layer3.output, (batch_size, 2048), dropout_active)
+    layer4_input = dropout(rng, layer3.output, (batch_size, 2560), dropout_active)
 
     # Maxout layer reduces output dimension to (batch_size, input_dim / pool_size)
     # in this case: (batch_size, 512/2) = (batch_size, 256)
@@ -535,8 +535,8 @@ def evaluate_lenet5(n_epochs=400, nkerns=[32, 64, 128], batch_size=256):
     layer4 = HiddenLayer(
         rng,
         input=layer4_input,
-        n_in=2048,
-        n_out=2048,
+        n_in=2560,
+        n_out=2560,
         activation=relu,
         max_col_norm=2.
     )
@@ -549,9 +549,9 @@ def evaluate_lenet5(n_epochs=400, nkerns=[32, 64, 128], batch_size=256):
     # )
 
     # add dropout at 0.5 rate
-    layer6_input = dropout(rng, layer4.output, (batch_size, 2048), dropout_active)
+    layer6_input = dropout(rng, layer4.output, (batch_size, 2560), dropout_active)
     # classify the values of the fully-connected sigmoidal layer
-    layer6 = LogisticRegression(input=layer6_input, n_in=2048, n_out=121)
+    layer6 = LogisticRegression(input=layer6_input, n_in=2560, n_out=121)
 
     # the cost we minimize during training is the NLL of the model
     cost = layer6.negative_log_likelihood(y)
@@ -663,8 +663,8 @@ def evaluate_lenet5(n_epochs=400, nkerns=[32, 64, 128], batch_size=256):
             # update learning rate and momentum according to schedule
             if epoch in learning_rate_schedule:
                  learning_rate.set_value(numpy.array(learning_rate_schedule[epoch], dtype=theano.config.floatX))
-            # if epoch in momentum_schedule:
-            #      momentum.set_value(numpy.array(momentum_schedule[epoch], dtype=theano.config.floatX))
+            if epoch in momentum_schedule:
+                 momentum.set_value(numpy.array(momentum_schedule[epoch], dtype=theano.config.floatX))
 
             if (iter + 1) % validation_frequency == 0:
 
@@ -745,7 +745,7 @@ def evaluate_lenet5(n_epochs=400, nkerns=[32, 64, 128], batch_size=256):
 
     # save train and validation errors
     results = numpy.array([n_iter, test_err, valid_err], dtype=numpy.float)
-    numpy.save("data/tidy/dense2048_rotation.npy", results)
+    numpy.save("data/tidy/dense2560_rotation.npy", results)
 
 if __name__ == '__main__':
     evaluate_lenet5()
