@@ -44,7 +44,6 @@ def process_images(queue, images, rand_seed=0, max_items=5):
         # probably the consumer is not processingvalues anymores
         pass
     print("Exiting")
-    queue.join()
 
 def transform(image, max_angle=360, flip=False, shift=4, zoom_range=(1/1.2, 1.2),
               image_size=(48,48),

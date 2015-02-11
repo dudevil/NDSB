@@ -29,6 +29,7 @@ class DataSetLoader:
                  img_size=48,
                  rotate_angle=360,
                  n_epochs=200,
+                 parallel=True,
                  rng=np.random.RandomState(123)
     ):
         self.data_dir = data_dir
@@ -54,12 +55,13 @@ class DataSetLoader:
              for x in map(self.resize_f, self.X_train)]))
         self.X_train_padded = np.vstack(tuple(map(square, self.X_train)))
         self.X_valid_padded = np.vstack(tuple(map(square, self.X_valid)))
-        self.queue = Queue(5)
-        self.bg_process = Process(target=process_images,
+        if parallel:
+            self.queue = Queue(5)
+            self.bg_process = Process(target=process_images,
                              args=(self.queue, self.X_train_resized),
                              kwargs={"rand_seed": self.rng.randint(9999),
-                                     "max_items": n_epochs})
-        self.bg_process.start()
+                                     "max_items": n_epochs + 1})
+            self.bg_process.start()
 
 
     def load_images(self):
@@ -90,7 +92,7 @@ class DataSetLoader:
             cPickle.dump((images, y), tfile)
         return pd.Series(images), np.array(y, dtype='int32')
 
-    def train_gen(self, padded=False):
+    def train_gen(self, padded=False, augment=False):
         assert len(self.X_train) == len(self.y_train)
         n_samples = len(self.X_train)
         # xs = np.zeros((n_samples, self.img_size * self.img_size), dtype='float32')
@@ -99,9 +101,12 @@ class DataSetLoader:
             shuff_ind = self.rng.permutation(n_samples)
             if padded:
                 yield self.X_train_padded[shuff_ind].astype('float32'), self.y_train[shuff_ind]
-            else:
+            elif augment:
                 #yield self.X_train_resized[shuff_ind].astype('float32'), self.y_train[shuff_ind]
                 yield self.queue.get().astype("float32"), self.y_train
+            else:
+                reshaped = self.X_train_resized.reshape(self.X_train_resized.shape[0], self.img_size * self.img_size)
+                yield reshaped[shuff_ind].astype("float32"), self.y_train[shuff_ind]
             #transform the training set
             # xs = np.vstack(tuple(
             #      map(functools.partial(transform,
