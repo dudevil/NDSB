@@ -403,8 +403,9 @@ def gen_updates_nesterov_momentum_no_bias_decay(loss,
     return updates
 
 learning_rate_schedule = {
-    0: 0.001,
-    400: 0.0005,
+    0: 0.01,
+    100: 0.005,
+    300: 0.001,
     700: 0.0001
 }
 
@@ -414,16 +415,16 @@ momentum_schedule = {
     700: 0.95
 }
 
-def evaluate_lenet5(n_epochs=500, nkerns=[32, 64, 128], batch_size=256):
+def evaluate_lenet5(n_epochs=400, nkerns=[32, 64, 128], batch_size=256):
     """ Demonstrates lenet on MNIST dataset
     Build train and evaluate model
     """
 
-    rng = numpy.random.RandomState(922015)
-
+    rng = numpy.random.RandomState(702215)
+    print "Preparing datasets ..."
     # load data and split train/test set stratified by classes
-    dsl = DataSetLoader(rng=rng, img_size=48)
-    train_gen = dsl.train_gen(padded=True)
+    dsl = DataSetLoader(rng=rng, img_size=48, n_epochs=n_epochs, parallel=True)
+    train_gen = dsl.train_gen(augment=True)
     valid_gen = dsl.valid_gen()
     train_x, train_y = train_gen.next()
     valid_x, valid_y = valid_gen.next()
@@ -442,7 +443,7 @@ def evaluate_lenet5(n_epochs=500, nkerns=[32, 64, 128], batch_size=256):
     valid_y = T.cast(theano.shared(valid_y, borrow=True), dtype='int32')
 
     # allocate learning rate and momentum shared variables
-    learning_rate = theano.shared(numpy.array(0.001, dtype=theano.config.floatX))
+    learning_rate = theano.shared(numpy.array(learning_rate_schedule[0], dtype=theano.config.floatX))
     momentum = theano.shared(numpy.array(0.95, dtype=theano.config.floatX))
 
     # allocate symbolic variables for the data
@@ -456,7 +457,7 @@ def evaluate_lenet5(n_epochs=500, nkerns=[32, 64, 128], batch_size=256):
     ######################
     # BUILD ACTUAL MODEL #
     ######################
-    print '... building the model'
+    print 'Building the model ...'
 
     # Reshape matrix of rasterized images of shape (batch_size, 48 * 48)
     # to a 4D tensor, compatible with our LeNetConvPoolLayer
@@ -513,20 +514,20 @@ def evaluate_lenet5(n_epochs=500, nkerns=[32, 64, 128], batch_size=256):
         rng,
         input=layer3_input,
         n_in=nkerns[2] * 4 * 4,
-        n_out=1024,
-        activation=None,
+        n_out=2048,
+        activation=relu,
         max_col_norm=2.
     )
 
     # Maxout layer reduces output dimension to (batch_size, input_dim / pool_size)
     # in this case: (batch_size, 512/2) = (batch_size, 256)
-    maxlayer1 = MaxOutLayer(
-         input=layer3.output,
-         input_shape=(batch_size, 1024),
-         pool_size=2
-    )
+    # maxlayer1 = MaxOutLayer(
+    #      input=layer3.output,
+    #      input_shape=(batch_size, 1024),
+    #      pool_size=2
+    # )
     # add dropout at 0.5 rate
-    layer4_input = dropout(rng, maxlayer1.output, (batch_size, 512), dropout_active)
+    layer4_input = dropout(rng, layer3.output, (batch_size, 2048), dropout_active)
 
     # Maxout layer reduces output dimension to (batch_size, input_dim / pool_size)
     # in this case: (batch_size, 512/2) = (batch_size, 256)
@@ -534,23 +535,23 @@ def evaluate_lenet5(n_epochs=500, nkerns=[32, 64, 128], batch_size=256):
     layer4 = HiddenLayer(
         rng,
         input=layer4_input,
-        n_in=512,
-        n_out=1024,
-        activation=None,
+        n_in=2048,
+        n_out=2048,
+        activation=relu,
         max_col_norm=2.
     )
     # Maxout layer reduces output dimension to (batch_size, input_dim / pool_size)
     # in this case: (batch_size, 512/2) = (batch_size, 256)
-    maxlayer2 = MaxOutLayer(
-        input=layer4.output,
-        input_shape=(batch_size, 1024),
-        pool_size=2
-    )
+    # maxlayer2 = MaxOutLayer(
+    #     input=layer4.output,
+    #     input_shape=(batch_size, 1024),
+    #     pool_size=2
+    # )
 
     # add dropout at 0.5 rate
-    layer6_input = dropout(rng, maxlayer2.output, (batch_size, 512), dropout_active)
+    layer6_input = dropout(rng, layer4.output, (batch_size, 2048), dropout_active)
     # classify the values of the fully-connected sigmoidal layer
-    layer6 = LogisticRegression(input=layer6_input, n_in=512, n_out=121)
+    layer6 = LogisticRegression(input=layer6_input, n_in=2048, n_out=121)
 
     # the cost we minimize during training is the NLL of the model
     cost = layer6.negative_log_likelihood(y)
@@ -627,7 +628,7 @@ def evaluate_lenet5(n_epochs=500, nkerns=[32, 64, 128], batch_size=256):
     ###############
     # TRAIN MODEL #
     ###############
-    print '... training'
+    print 'Training ...'
     # early-stopping parameters
     patience = 10000  # look as this many examples regardless
     patience_increase = 2  # wait this much longer when a new best is
@@ -647,20 +648,21 @@ def evaluate_lenet5(n_epochs=500, nkerns=[32, 64, 128], batch_size=256):
 
     epoch = 0
     done_looping = False
-
+    print("| Epoch | Train err | Validation err | Validation misclass |")
+    print("|----------------------------------------------------------|")
     while (epoch < n_epochs) and (not done_looping):
         epoch = epoch + 1
         for minibatch_index in xrange(n_train_batches):
 
             iter = (epoch - 1) * n_train_batches + minibatch_index
 
-            if iter % 100 == 0:
-                print 'training @ iter = ', iter
+            # if iter % 100 == 0:
+            #     print 'training @ iter = ', iter
             cost_ij = train_model(minibatch_index)
 
             # update learning rate and momentum according to schedule
-            # if epoch in learning_rate_schedule:
-            #      learning_rate.set_value(numpy.array(learning_rate_schedule[epoch], dtype=theano.config.floatX))
+            if epoch in learning_rate_schedule:
+                 learning_rate.set_value(numpy.array(learning_rate_schedule[epoch], dtype=theano.config.floatX))
             # if epoch in momentum_schedule:
             #      momentum.set_value(numpy.array(momentum_schedule[epoch], dtype=theano.config.floatX))
 
@@ -673,9 +675,11 @@ def evaluate_lenet5(n_epochs=500, nkerns=[32, 64, 128], batch_size=256):
                                      in xrange(n_val_batches)]
                 this_test_loss = numpy.mean(test_losses)
                 this_test_logloss = numpy.mean(test_loglosses)
-                print('epoch %i, minibatch %i/%i, validation error %.2f %% loglikelihood %f train error %f' %
-                      (epoch, minibatch_index + 1, n_train_batches,
-                       this_test_loss * 100., this_test_logloss, cost_ij))
+                print("|%6d | %9.6f | %14.6f | %17.2f %% |" %
+                      (epoch, cost_ij, this_test_logloss, this_test_loss * 100.))
+                # print('epoch %i, minibatch %i/%i, validation error %.2f %% loglikelihood %f train error %f' %
+                #       (epoch, minibatch_index + 1, n_train_batches,
+                #        this_test_loss * 100., this_test_logloss, cost_ij))
                 # print('Max weight in dense layers 1: %f 2: %f' %
                 #       (numpy.max(numpy.sqrt(numpy.sum(numpy.square(layer3.W.get_value(borrow=True)), axis=0))),
                 #        numpy.max(numpy.sqrt(numpy.sum(numpy.square(layer4.W.get_value(borrow=True)), axis=0)))))
@@ -709,9 +713,9 @@ def evaluate_lenet5(n_epochs=500, nkerns=[32, 64, 128], batch_size=256):
 
     end_time = time.clock()
     print('Optimization complete.')
-    print('Best validation score of %f %% obtained at iteration %i, '
-          'with loglikelihood %f %%' %
-          (best_test_loss * 100., best_iter + 1, best_test_logloss))
+    print('Best logloss score of %f %% obtained at iteration %i (epoch %i), '
+          'with misclassification rate %f %%' %
+          (best_test_logloss, best_iter + 1, best_iter / n_train_batches + 1, best_test_loss * 100.))
     print >> sys.stderr, ('The code for file ' +
                           os.path.split(__file__)[1] +
                           ' ran for %.2fm' % ((end_time - start_time) / 60.))
@@ -741,7 +745,7 @@ def evaluate_lenet5(n_epochs=500, nkerns=[32, 64, 128], batch_size=256):
 
     # save train and validation errors
     results = numpy.array([n_iter, test_err, valid_err], dtype=numpy.float)
-    numpy.save("data/tidy/maxout1024_padded.npy", results)
+    numpy.save("data/tidy/dense2048_rotation.npy", results)
 
 if __name__ == '__main__':
     evaluate_lenet5()
