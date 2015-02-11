@@ -18,12 +18,19 @@ import pandas as pd
 from skimage.io import imread
 from skimage.transform import resize
 from sklearn.cross_validation import StratifiedShuffleSplit
-from augmentation import square
+from augmentation import square, process_images
+from multiprocessing import Process, Queue
 
 
 class DataSetLoader:
 
-    def __init__(self, data_dir="data", img_size=48, rng=np.random.RandomState(123)):
+    def __init__(self,
+                 data_dir="data",
+                 img_size=48,
+                 rotate_angle=360,
+                 n_epochs=200,
+                 rng=np.random.RandomState(123)
+    ):
         self.data_dir = data_dir
         self.class_labels = {}
         self._num_label = 0
@@ -42,10 +49,17 @@ class DataSetLoader:
         X, y = self.load_images()
         self.X_train, self.X_valid, self.y_train, self.y_valid = self.train_test_split(X, y)
         self.resize_f = functools.partial(resize, output_shape=(self.img_size, self.img_size))
-        self.X_train_resized = np.vstack(tuple([x.reshape(1, -1) for x in
-                                                map(self.resize_f, self.X_train)]))
+        self.X_train_resized = np.vstack(tuple(
+            [x.reshape(1, self.img_size, self.img_size)
+             for x in map(self.resize_f, self.X_train)]))
         self.X_train_padded = np.vstack(tuple(map(square, self.X_train)))
         self.X_valid_padded = np.vstack(tuple(map(square, self.X_valid)))
+        self.queue = Queue(5)
+        self.bg_process = Process(target=process_images,
+                             args=(self.queue, self.X_train_resized),
+                             kwargs={"rand_seed": self.rng.randint(9999),
+                                     "max_items": n_epochs})
+        self.bg_process.start()
 
 
     def load_images(self):
@@ -86,7 +100,8 @@ class DataSetLoader:
             if padded:
                 yield self.X_train_padded[shuff_ind].astype('float32'), self.y_train[shuff_ind]
             else:
-                yield self.X_train_resized[shuff_ind].astype('float32'), self.y_train[shuff_ind]
+                #yield self.X_train_resized[shuff_ind].astype('float32'), self.y_train[shuff_ind]
+                yield self.queue.get().astype("float32"), self.y_train
             #transform the training set
             # xs = np.vstack(tuple(
             #      map(functools.partial(transform,
@@ -106,9 +121,6 @@ class DataSetLoader:
                     map(functools.partial(resize, output_shape=(self.img_size, self.img_size)),
                         self.X_valid)]))
                 yield xs[shuff_ind].astype('float32'), self.y_valid[shuff_ind]
-
-
-
 
     def load_train(self):
         # check if a dataset with the given image size has already been processed

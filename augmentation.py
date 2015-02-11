@@ -2,6 +2,8 @@ __author__ = 'dudevil'
 
 import skimage.transform
 import numpy as np
+import functools
+from Queue import Full
 
 def square(image, resize=(48, 48), flatten=True):
     img_x, img_y = image.shape
@@ -20,6 +22,29 @@ def square(image, resize=(48, 48), flatten=True):
         return padded.flatten()
     return padded
 
+def rand_rotate(image, rng=np.random.RandomState(0), max_angle=360, flatten=True):
+    angle = rng.randint(0, max_angle)
+    output = skimage.transform.rotate(image, angle,  mode='constant', cval=1.0)
+    if flatten:
+        return output.flatten()
+    return output
+
+def process_images(queue, images, rand_seed=0, max_items=5):
+    # as this function is supposed to be used in a multiprocessing setting
+    # we initiize a separate random state with the provided seed
+    rng = np.random.RandomState(rand_seed)
+    rotater = functools.partial(rand_rotate, rng=rng)
+    try:
+        while max_items:
+            rotated = np.vstack(tuple(map(rotater, images)))
+            queue.put(rotated, block=True, timeout=120)
+            max_items -= 1
+            # print("Put")
+    except Full:
+        # probably the consumer is not processingvalues anymores
+        pass
+    print("Exiting")
+    queue.join()
 
 def transform(image, max_angle=360, flip=False, shift=4, zoom_range=(1/1.2, 1.2),
               image_size=(48,48),
