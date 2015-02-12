@@ -18,8 +18,8 @@ import pandas as pd
 from skimage.io import imread
 from skimage.transform import resize
 from sklearn.cross_validation import StratifiedShuffleSplit
-from augmentation import square, process_images
-from multiprocessing import Process, Queue
+from augmentation import square, Augmenter
+from multiprocessing import Queue
 
 
 class DataSetLoader:
@@ -30,8 +30,7 @@ class DataSetLoader:
                  rotate_angle=360,
                  n_epochs=200,
                  parallel=True,
-                 rng=np.random.RandomState(123)
-    ):
+                 rng=np.random.RandomState(123)):
         self.data_dir = data_dir
         self.class_labels = {}
         self._num_label = 0
@@ -57,11 +56,13 @@ class DataSetLoader:
         self.X_valid_padded = np.vstack(tuple(map(square, self.X_valid)))
         if parallel:
             self.queue = Queue(5)
-            self.bg_process = Process(target=process_images,
-                             args=(self.queue, self.X_train_resized),
-                             kwargs={"rand_seed": self.rng.randint(9999),
-                                     "max_items": n_epochs + 1})
-            self.bg_process.start()
+            self.augmenter = Augmenter(self.queue,
+                                       self.X_train_resized,
+                                       max_items=n_epochs+1,
+                                       random_seed=self.rng.randint(9999),
+                                       max_angle=rotate_angle,
+                                       flatten=True)
+            self.augmenter.start()
 
 
     def load_images(self):

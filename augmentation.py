@@ -1,9 +1,25 @@
 __author__ = 'dudevil'
 
+from multiprocessing import Process
+import prctl
+from sys import platform as _platform
+from signal import SIGHUP
+from Queue import Full
 import skimage.transform
 import numpy as np
-import functools
-from Queue import Full
+import cProfile
+
+def do_cprofile(func):
+    def profiled_func(*args, **kwargs):
+        profile = cProfile.Profile()
+        try:
+            profile.enable()
+            result = func(*args, **kwargs)
+            profile.disable()
+            return result
+        finally:
+            profile.print_stats()
+    return profiled_func
 
 def square(image, resize=(48, 48), flatten=True):
     img_x, img_y = image.shape
@@ -22,28 +38,6 @@ def square(image, resize=(48, 48), flatten=True):
         return padded.flatten()
     return padded
 
-def rand_rotate(image, rng=np.random.RandomState(0), max_angle=360, flatten=True):
-    angle = rng.randint(0, max_angle)
-    output = skimage.transform.rotate(image, angle,  mode='constant', cval=1.0)
-    if flatten:
-        return output.flatten()
-    return output
-
-def process_images(queue, images, rand_seed=0, max_items=5):
-    # as this function is supposed to be used in a multiprocessing setting
-    # we initiize a separate random state with the provided seed
-    rng = np.random.RandomState(rand_seed)
-    rotater = functools.partial(rand_rotate, rng=rng)
-    try:
-        while max_items:
-            rotated = np.vstack(tuple(map(rotater, images)))
-            queue.put(rotated, block=True, timeout=120)
-            max_items -= 1
-            # print("Put")
-    except Full:
-        # probably the consumer is not processingvalues anymores
-        pass
-    print("Exiting")
 
 def transform(image, max_angle=360, flip=False, shift=4, zoom_range=(1/1.2, 1.2),
               image_size=(48,48),
@@ -83,3 +77,37 @@ def transform(image, max_angle=360, flip=False, shift=4, zoom_range=(1/1.2, 1.2)
     if flatten:
         return res.reshape(1, -1)
     return res
+
+class Augmenter(Process):
+
+    def __init__(self, queue, images, max_items, random_seed=0, max_angle=360, flatten=True):
+        super(Augmenter, self).__init__()
+        self.q = queue
+        self.rng = np.random.RandomState(random_seed)
+        self.max_angle = max_angle
+        self.flatten = flatten
+        self.images = images
+        self.items_count = max_items
+        # kill this process if parent process dies
+        # this only works on linux, so you should update the code or kill the process
+        # yourself if using other OSes
+        if _platform == "linux" or _platform == "linux2":
+            prctl.set_pdeathsig(SIGHUP)
+
+    def rand_rotate(self, image):
+        angle = self.rng.randint(0, self.max_angle)
+        output = skimage.transform.rotate(image, angle,  mode='constant', cval=1.0)
+        if self.flatten:
+            return output.flatten()
+        return output
+
+    def run(self):
+        try:
+            while self.items_count:
+                rotated = np.vstack(tuple(map(self.rand_rotate, self.images)))
+                self.q.put(rotated, block=True, timeout=120)
+                self.items_count -= 1
+        except Full:
+        # probably the consumer is not processingvalues anymores
+            print("Queue full")
+        print("Exiting")
