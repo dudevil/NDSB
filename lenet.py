@@ -66,14 +66,24 @@ class HiddenLayer(object):
         #        We have no info for other function, so we use the same as
         #        tanh.
         if W is None:
-            W_values = numpy.asarray(
+            if activation == relu:
+                # for relu units use initialization proposed here:
+                # http://arxiv-web3.library.cornell.edu/pdf/1502.01852v1.pdf
+                W_values = numpy.asarray(
+                    rng.normal(
+                        loc=0.0,
+                        scale=numpy.sqrt(2./n_out),
+                        size=(n_in, n_out)
+                    ),
+                    dtype=theano.config.floatX)
+            else:
+                W_values = numpy.asarray(
                 rng.uniform(
                     low=-numpy.sqrt(6. / (n_in + n_out)),
                     high=numpy.sqrt(6. / (n_in + n_out)),
                     size=(n_in, n_out)
                 ),
-                dtype=theano.config.floatX
-            )
+                dtype=theano.config.floatX)
             if activation == theano.tensor.nnet.sigmoid:
                 W_values *= 4
 
@@ -266,24 +276,34 @@ class LeNetConvPoolLayer(object):
         # each unit in the lower layer receives a gradient from:
         # "num output feature maps * filter height * filter width" /
         #   pooling size
-        fan_out = (filter_shape[0] * numpy.prod(filter_shape[2:]) /
-                   numpy.prod(poolsize))
+        # fan_out = (filter_shape[0] * numpy.prod(filter_shape[2:]) /
+        #            numpy.prod(poolsize))
+        #
         # initialize weights with random weights
-        # weights are initialized from a gaussian distribution centered at 0 with varience 0.01
-        # such initialization speeds up learning
-        W_bound = numpy.sqrt(6. / (fan_in + fan_out))
-        self.W = theano.shared(
-            numpy.asarray(
+        # for relu units use initialization proposed here:
+        # http://arxiv-web3.library.cornell.edu/pdf/1502.01852v1.pdf
+        if activation == relu:
+            W_var = numpy.sqrt(2. / fan_in)
+            W_bound = numpy.asarray(
+                rng.normal(loc=0.0, scale=W_var, size=filter_shape),
+                dtype=theano.config.floatX)
+        else:
+            # weights are initialized from a gaussian distribution centered at 0 with varience 0.01
+            W_bound = numpy.asarray(
                 rng.normal(loc=0.0, scale=0.01, size=filter_shape),
-                dtype=theano.config.floatX
-            ),
-            borrow=True
-        )
+                dtype=theano.config.floatX)
+        self.W = theano.shared(W_bound, borrow=True)
 
         # the bias is a 1D tensor -- one bias per output feature map
         b_values = numpy.zeros((filter_shape[0],), dtype=theano.config.floatX)
         self.b = theano.shared(value=b_values, borrow=True)
 
+        # parametric relu activation
+        if activation == 'prelu':
+            self.a = theano.shared(numpy.array((0.25,), dtype=theano.config.floatX), borrow=False, name='a', broadcastable=(True,))
+            #print(self.a)
+        else:
+            self.a = theano.shared(numpy.array(0.0, dtype=theano.config.floatX), borrow=False, name='a')
         # convolve input feature maps with filters
         conv_out = conv.conv2d(
             input=input,
@@ -292,23 +312,40 @@ class LeNetConvPoolLayer(object):
             image_shape=image_shape
         )
 
-        # downsample each feature map individually, using maxpooling
-        pooled_out = downsample.max_pool_2d(
-            input=conv_out,
-            ds=poolsize,
-            ignore_border=True
-        )
+        if poolsize:
+            # downsample each feature map individually, using maxpooling
+            pooled_out = downsample.max_pool_2d(
+                input=conv_out,
+                ds=poolsize,
+                ignore_border=True
+            )
+        else:
+            # no downsampling
+            pooled_out = conv_out
 
         # add the bias term. Since the bias is a vector (1D array), we first
         # reshape it to a tensor of shape (1, n_filters, 1, 1). Each bias will
         # thus be broadcasted across mini-batches and feature map
         # width & height
-        self.output = activation(pooled_out + self.b.dimshuffle('x', 0, 'x', 'x'))
+        lin_output = pooled_out + self.b.dimshuffle('x', 0, 'x', 'x')
+        if activation:
+            self.output = activation(lin_output)
+        else:
+            self.output = lin_output
 
         # store parameters of this layer
         self.params = [self.W, self.b]
         self.bias_params = [self.b]
 
+
+class ParametrizedReLuLayer(object):
+
+    def __init__(self, input, a_init=0.25):
+        self.input = input
+        self.a = theano.shared(numpy.cast[theano.config.floatX](a_init), name='a')
+        self.output = T.maximum(0, input) + self.a * T.minimum(0, input)
+        self.params = [self.a]
+        self.bias_params = []
 
 class MaxOutLayer(object):
     """
@@ -380,7 +417,7 @@ def gen_updates_nesterov_momentum_no_bias_decay(loss,
                                                 all_bias_parameters,
                                                 learning_rate,
                                                 momentum,
-                                                weight_decay=0.0):
+                                                weight_decay=0.0005):
     """
     Nesterov momentum, but excluding the biases from the weight decay.
     If biases are included learning the network seems impossible.
@@ -405,22 +442,21 @@ def gen_updates_nesterov_momentum_no_bias_decay(loss,
 learning_rate_schedule = {
     0: 0.02,
     200: 0.01,
-    300: 0.007,
-    400: 0.005,
+    450: 0.001
 }
 
 momentum_schedule = {
     0: 0.9,
-    400: 0.95,
-    700: 0.99
+    202: 0.95,
+    460: 0.99
 }
 
-def evaluate_lenet5(n_epochs=500, nkerns=[32, 64, 128], batch_size=256):
+def evaluate_lenet5(n_epochs=500, nkerns=[32, 64, 128, 128], batch_size=256):
     """ Demonstrates lenet on MNIST dataset
     Build train and evaluate model
     """
 
-    rng = numpy.random.RandomState(702215)
+    rng = numpy.random.RandomState(121)
     print "Preparing datasets ..."
     # load data and split train/test set stratified by classes
     dsl = DataSetLoader(rng=rng, img_size=48, n_epochs=n_epochs, parallel=True)
@@ -429,7 +465,6 @@ def evaluate_lenet5(n_epochs=500, nkerns=[32, 64, 128], batch_size=256):
     train_x, train_y = train_gen.next()
     valid_x, valid_y = valid_gen.next()
     # test_x = dsl.load_test()
-
     # compute number of minibatches for training, validation and testing
     n_train_batches = train_x.shape[0] / batch_size
     n_val_batches = valid_x.shape[0] / batch_size
@@ -476,58 +511,75 @@ def evaluate_lenet5(n_epochs=500, nkerns=[32, 64, 128], batch_size=256):
         activation=relu
     )
 
+    #prlayer0 = ParametrizedReLuLayer(layer0.output)
+
     # Construct the second convolutional pooling layer
     # filtering reduces the image size to (22-5+1, 22-5+1) = (18, 18)
     # maxpooling reduces this further to (18/2, 18/2) = (9, 9)
     # 4D output tensor is thus of shape (batch_size, nkerns[1], 14, 14)
     #layer1_input = dropout(rng, layer0.output, (batch_size, nkerns[0], 22, 22), dropout_active, rate=0.1)
-    layer1_input = layer0.output
+    #layer1_input = prlayer.output
     layer1 = LeNetConvPoolLayer(
         rng,
-        input=layer1_input,
+        input=layer0.output,
         image_shape=(batch_size, nkerns[0], 22, 22),
         filter_shape=(nkerns[1], nkerns[0], 5, 5),
         poolsize=(2, 2),
         activation=relu
     )
+
+    #prlayer1 = ParametrizedReLuLayer(layer1.output)
     # Construct the second convolutional pooling layer
-    # filtering reduces the image size to (9-2+1, 9-2+1) = (8, 8)
-    # maxpooling reduces this further to (8/2, 8/2) = (4, 4)
+    # filtering reduces the image size to (9-4+1, 9-4+1) = (6, 6)
     #layer2_input = dropout(rng, layer1.output, (batch_size, nkerns[1], 9, 9), dropout_active, rate=0.1)
     layer2_input = layer1.output
     layer2 = LeNetConvPoolLayer(
         rng,
         input=layer2_input,
         image_shape=(batch_size, nkerns[1], 9, 9),
-        filter_shape=(nkerns[2], nkerns[1], 2, 2),
+        filter_shape=(nkerns[2], nkerns[1], 4, 4),
+        poolsize=(),
+        activation=relu
+    )
+
+    # Construct the second convolutional pooling layer
+    # filtering reduces the image size to (9-6+1, 9-6+1) = (4, 4)
+    # maxpooling reduces this further to (4/2, 4/2) = (2, 2)
+    #prlayer2 = ParametrizedReLuLayer(layer2.output)
+    layer7 = LeNetConvPoolLayer(
+        rng,
+        input=layer2.output,
+        image_shape=(batch_size, nkerns[2], 6, 6),
+        filter_shape=(nkerns[3], nkerns[2], 3, 3),
         poolsize=(2, 2),
         activation=relu
     )
 
+    #prlayer3 = ParametrizedReLuLayer(layer7.output)
     # the HiddenLayer being fully-connected, it operates on 2D matrices of
     # shape (batch_size, num_pixels) (i.e matrix of rasterized images).
     # This will generate a matrix of shape (batch_size, nkerns[2] * 5 * 5),
 
-    layer3_input = dropout(rng, layer2.output.flatten(2), (batch_size, nkerns[2] * 4 * 4), dropout_active)
+    layer3_input = dropout(rng, layer7.output.flatten(2), (batch_size, nkerns[3] * 2 * 2), dropout_active)
     # construct a fully-connected relu layer
     layer3 = HiddenLayer(
         rng,
         input=layer3_input,
-        n_in=nkerns[2] * 4 * 4,
-        n_out=2560,
+        n_in=nkerns[3] * 2 * 2,
+        n_out=2048,
         activation=relu,
         max_col_norm=2.
     )
-
+    # prlayer4 = ParametrizedReLuLayer(layer3.output)
     # Maxout layer reduces output dimension to (batch_size, input_dim / pool_size)
     # in this case: (batch_size, 512/2) = (batch_size, 256)
     # maxlayer1 = MaxOutLayer(
     #      input=layer3.output,
-    #      input_shape=(batch_size, 1024),
+    #      input_shape=(batch_size, 2560),
     #      pool_size=2
     # )
     # add dropout at 0.5 rate
-    layer4_input = dropout(rng, layer3.output, (batch_size, 2560), dropout_active)
+    layer4_input = dropout(rng, layer3.output, (batch_size, 2048), dropout_active)
 
     # Maxout layer reduces output dimension to (batch_size, input_dim / pool_size)
     # in this case: (batch_size, 512/2) = (batch_size, 256)
@@ -535,8 +587,8 @@ def evaluate_lenet5(n_epochs=500, nkerns=[32, 64, 128], batch_size=256):
     layer4 = HiddenLayer(
         rng,
         input=layer4_input,
-        n_in=2560,
-        n_out=2560,
+        n_in=2048,
+        n_out=2048,
         activation=relu,
         max_col_norm=2.
     )
@@ -544,14 +596,14 @@ def evaluate_lenet5(n_epochs=500, nkerns=[32, 64, 128], batch_size=256):
     # in this case: (batch_size, 512/2) = (batch_size, 256)
     # maxlayer2 = MaxOutLayer(
     #     input=layer4.output,
-    #     input_shape=(batch_size, 1024),
+    #     input_shape=(batch_size, 2560),
     #     pool_size=2
     # )
-
+    #prlayer5 = ParametrizedReLuLayer(layer4.output)
     # add dropout at 0.5 rate
-    layer6_input = dropout(rng, layer4.output, (batch_size, 2560), dropout_active)
+    layer6_input = dropout(rng, layer4.output, (batch_size, 2048), dropout_active)
     # classify the values of the fully-connected sigmoidal layer
-    layer6 = LogisticRegression(input=layer6_input, n_in=2560, n_out=121)
+    layer6 = LogisticRegression(input=layer6_input, n_in=2048, n_out=121)
 
     # the cost we minimize during training is the NLL of the model
     cost = layer6.negative_log_likelihood(y)
@@ -582,10 +634,13 @@ def evaluate_lenet5(n_epochs=500, nkerns=[32, 64, 128], batch_size=256):
 
 
     # create a list of all model parameters to be fit by gradient descent
-    params = layer6.params + layer4.params + layer2.params + layer1.params + layer0.params + layer3.params
+    params = layer6.params + layer4.params + layer2.params + layer1.params + layer0.params +\
+             layer3.params + layer7.params
+
+
     # a list of bias parameters: these will be excluded from the Nesterov momentum updates
     bias_params = layer6.bias_params + layer4.bias_params + layer2.bias_params + layer1.bias_params \
-                  + layer0.bias_params + layer3.bias_params
+                  + layer0.bias_params + layer3.bias_params + layer7.bias_params
     # create a list of gradients for all model parameters, this would be a plain SGD
     #grads = T.grad(cost, params)
     # train_model is a function that updates the model parameters by
@@ -648,8 +703,8 @@ def evaluate_lenet5(n_epochs=500, nkerns=[32, 64, 128], batch_size=256):
 
     epoch = 0
     done_looping = False
-    print("| Epoch | Train err | Validation err | Validation misclass |")
-    print("|----------------------------------------------------------|")
+    print("| Epoch | Train err | Validation err | Validation misclass | Ratio |")
+    print("|------------------------------------------------------------------|")
     while (epoch < n_epochs) and (not done_looping):
         epoch = epoch + 1
         for minibatch_index in xrange(n_train_batches):
@@ -675,8 +730,8 @@ def evaluate_lenet5(n_epochs=500, nkerns=[32, 64, 128], batch_size=256):
                                      in xrange(n_val_batches)]
                 this_test_loss = numpy.mean(test_losses)
                 this_test_logloss = numpy.mean(test_loglosses)
-                print("|%6d | %9.6f | %14.6f | %17.2f %% |" %
-                      (epoch, cost_ij, this_test_logloss, this_test_loss * 100.))
+                print("|%6d | %9.6f | %14.6f | %17.2f %% | %1.3f |" %
+                      (epoch, cost_ij, this_test_logloss, this_test_loss * 100., this_test_logloss / cost_ij))
                 # print('epoch %i, minibatch %i/%i, validation error %.2f %% loglikelihood %f train error %f' %
                 #       (epoch, minibatch_index + 1, n_train_batches,
                 #        this_test_loss * 100., this_test_logloss, cost_ij))
@@ -704,12 +759,14 @@ def evaluate_lenet5(n_epochs=500, nkerns=[32, 64, 128], batch_size=256):
             if patience <= iter:
                 done_looping = True
                 break
-
+        print("[%f] epoch done" % time.clock())
         # get training data for next epoch
         nx, ny = train_gen.next()
+        print("[%f] train epoch generated" % time.clock())
         # load the data into the GPU
         train_x.set_value(nx, borrow=True)
         train_y.set_value(ny, borrow=True)
+        print("[%f] train epoch loaded" % time.clock())
 
     end_time = time.clock()
     print('Optimization complete.')
@@ -745,7 +802,7 @@ def evaluate_lenet5(n_epochs=500, nkerns=[32, 64, 128], batch_size=256):
 
     # save train and validation errors
     results = numpy.array([n_iter, test_err, valid_err], dtype=numpy.float)
-    numpy.save("data/tidy/dense2560_rotation.npy", results)
+    numpy.save("data/tidy/4conv_dense2048_prelu.npy", results)
 
 if __name__ == '__main__':
     evaluate_lenet5()

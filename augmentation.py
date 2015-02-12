@@ -1,25 +1,25 @@
 __author__ = 'dudevil'
 
 from multiprocessing import Process
-import prctl
+# import prctl
 from sys import platform as _platform
 from signal import SIGHUP
 from Queue import Full
 import skimage.transform
 import numpy as np
-import cProfile
-
-def do_cprofile(func):
-    def profiled_func(*args, **kwargs):
-        profile = cProfile.Profile()
-        try:
-            profile.enable()
-            result = func(*args, **kwargs)
-            profile.disable()
-            return result
-        finally:
-            profile.print_stats()
-    return profiled_func
+# import cProfile
+#
+# def do_cprofile(func):
+#     def profiled_func(*args, **kwargs):
+#         profile = cProfile.Profile()
+#         try:
+#             profile.enable()
+#             result = func(*args, **kwargs)
+#             profile.disable()
+#             return result
+#         finally:
+#             profile.print_stats()
+#     return profiled_func
 
 def square(image, resize=(48, 48), flatten=True):
     img_x, img_y = image.shape
@@ -91,8 +91,8 @@ class Augmenter(Process):
         # kill this process if parent process dies
         # this only works on linux, so you should update the code or kill the process
         # yourself if using other OSes
-        if _platform == "linux" or _platform == "linux2":
-            prctl.set_pdeathsig(SIGHUP)
+        # if _platform == "linux" or _platform == "linux2":
+        #     prctl.set_pdeathsig(SIGHUP)
 
     def rand_rotate(self, image):
         angle = self.rng.randint(0, self.max_angle)
@@ -101,11 +101,12 @@ class Augmenter(Process):
             return output.flatten()
         return output
 
+#    @do_cprofile
     def run(self):
         try:
             while self.items_count:
                 rotated = np.vstack(tuple(map(self.rand_rotate, self.images)))
-                self.q.put(rotated, block=True, timeout=120)
+                self.q.put(rotated, block=True, timeout=100)
                 self.items_count -= 1
         except Full:
         # probably the consumer is not processingvalues anymores
