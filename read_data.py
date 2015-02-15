@@ -28,6 +28,7 @@ class DataSetLoader:
                  data_dir="data",
                  img_size=48,
                  rotate_angle=360,
+                 shift=4,
                  n_epochs=200,
                  parallel=True,
                  rng=np.random.RandomState(123)):
@@ -48,19 +49,22 @@ class DataSetLoader:
         self.rng = rng
         X, y = self.load_images()
         self.X_train, self.X_valid, self.y_train, self.y_valid = self.train_test_split(X, y)
-        self.resize_f = functools.partial(resize, output_shape=(self.img_size, self.img_size))
+        del X, y
+        self.resize_f = functools.partial(resize,
+                                          output_shape=(self.img_size, self.img_size),
+                                          mode='constant',
+                                          cval=1.)
         self.X_train_resized = np.vstack(tuple(
             [x.reshape(1, self.img_size, self.img_size)
              for x in map(self.resize_f, self.X_train)]))
-        self.X_train_padded = np.vstack(tuple(map(square, self.X_train)))
-        self.X_valid_padded = np.vstack(tuple(map(square, self.X_valid)))
         if parallel:
-            self.queue = Queue(5)
+            self.queue = Queue(min(5, n_epochs+1))
             self.augmenter = Augmenter(self.queue,
                                        self.X_train_resized,
                                        max_items=n_epochs+1,
                                        random_seed=self.rng.randint(9999),
                                        max_angle=rotate_angle,
+                                       max_shift=shift,
                                        flatten=True)
             self.augmenter.start()
 
@@ -192,7 +196,7 @@ class DataSetLoader:
         assert w == len(self.class_labels), "Not all class labels present"
         # number of test cases
         assert h == len(self.testfilenames), "Not all test observations present"
-        colnames = [self.class_labels[str(ind)] for ind in xrange(121)]
+        colnames = [self.class_labels[ind] for ind in xrange(121)]
         dfr = pd.DataFrame(y_pred, index=self.testfilenames, columns=colnames)
         dfr.to_csv(os.path.join(self.data_dir, "submissions", "submission-%s.csv" % file_suffix),
                    format="%f",

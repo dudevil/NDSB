@@ -440,18 +440,22 @@ def gen_updates_nesterov_momentum_no_bias_decay(loss,
     return updates
 
 learning_rate_schedule = {
-    0: 0.02,
-    200: 0.01,
-    450: 0.001
+    0: 0.01,
+    100: 0.005,
+    200: 0.001,
+    300: 0.0008,
+    400: 0.0005,
+    450: 0.0001
 }
 
 momentum_schedule = {
     0: 0.9,
-    202: 0.95,
-    460: 0.99
+    102: 0.95,
+    302: 0.99,
+    400: 0.995
 }
 
-def evaluate_lenet5(n_epochs=500, nkerns=[32, 64, 128, 128], batch_size=256):
+def evaluate_lenet5(n_epochs=500, nkerns=[32, 64, 128, 128], batch_size=200):
     """ Demonstrates lenet on MNIST dataset
     Build train and evaluate model
     """
@@ -464,7 +468,7 @@ def evaluate_lenet5(n_epochs=500, nkerns=[32, 64, 128, 128], batch_size=256):
     valid_gen = dsl.valid_gen()
     train_x, train_y = train_gen.next()
     valid_x, valid_y = valid_gen.next()
-    # test_x = dsl.load_test()
+    test_x = dsl.load_test()
     # compute number of minibatches for training, validation and testing
     n_train_batches = train_x.shape[0] / batch_size
     n_val_batches = valid_x.shape[0] / batch_size
@@ -473,7 +477,7 @@ def evaluate_lenet5(n_epochs=500, nkerns=[32, 64, 128, 128], batch_size=256):
     train_x = theano.shared(train_x, borrow=True)
     valid_x = theano.shared(valid_x, borrow=True)
     # won't fit into my gpu memory
-    # test_x = theano.shared(test_x, borrow=True)
+
     train_y = T.cast(theano.shared(train_y, borrow=True), dtype='int32')
     valid_y = T.cast(theano.shared(valid_y, borrow=True), dtype='int32')
 
@@ -759,50 +763,48 @@ def evaluate_lenet5(n_epochs=500, nkerns=[32, 64, 128, 128], batch_size=256):
             if patience <= iter:
                 done_looping = True
                 break
-        print("[%f] epoch done" % time.clock())
+        #print("[%f] epoch done" % time.clock())
         # get training data for next epoch
         nx, ny = train_gen.next()
-        print("[%f] train epoch generated" % time.clock())
+        #print("[%f] train epoch generated" % time.clock())
         # load the data into the GPU
         train_x.set_value(nx, borrow=True)
         train_y.set_value(ny, borrow=True)
-        print("[%f] train epoch loaded" % time.clock())
+        #print("[%f] train epoch loaded" % time.clock())
 
     end_time = time.clock()
     print('Optimization complete.')
     print('Best logloss score of %f %% obtained at iteration %i (epoch %i), '
           'with misclassification rate %f %%' %
           (best_test_logloss, best_iter + 1, best_iter / n_train_batches + 1, best_test_loss * 100.))
-    print >> sys.stderr, ('The code for file ' +
-                          os.path.split(__file__)[1] +
-                          ' ran for %.2fm' % ((end_time - start_time) / 60.))
+    print >> sys.stderr, ('The training lasted %.2fm' % ((end_time - start_time) / 60.))
     ################
     #  Predicting  #
     ################
-    # res = []
-    # print(test_x.shape)
-    # parts = numpy.array_split(test_x, 4)
-    # test_x_part = theano.shared(parts[0], borrow=True)
-    # predict = theano.function(
-    #     [index],
-    #     layer3.predict_proba(),
-    #     givens={
-    #         x: test_x_part[index * batch_size: (index + 1) * batch_size],
-    #         },
-    # )
-    # for part in parts:
-    #     test_x_part.set_value(part, borrow=True)
-    #     n_part_batches = part.shape[0] / batch_size
-    #     for minibatch_index in xrange(n_part_batches):
-    #         tmp = predict(minibatch_index)
-    #         res.append(tmp)
-    # result = numpy.vstack(tuple(res))
-    # print(result.shape)
-    # dsl.save_submission(result, '1')
+    res = []
+    print(test_x.shape)
+
+    n_test_batches = test_x.shape[0] / batch_size
+    test_x = theano.shared(test_x, borrow=True)
+
+    predict = theano.function(
+        [index],
+        layer6.predict_proba(),
+        givens={
+            x: test_x[index * batch_size: (index + 1) * batch_size],
+            dropout_active: theano.shared(numpy.array(0, dtype='int8'), borrow=False)
+            },
+    )
+    for minibatch_index in xrange(n_test_batches):
+            tmp = predict(minibatch_index)
+            res.append(tmp)
+    result = numpy.vstack(tuple(res))
+    print(result.shape)
+    dsl.save_submission(result, '2')
 
     # save train and validation errors
     results = numpy.array([n_iter, test_err, valid_err], dtype=numpy.float)
-    numpy.save("data/tidy/4conv_dense2048_prelu.npy", results)
+    numpy.save("data/tidy/4conv_dense2048_smallerlr_shiftscale.npy", results)
 
 if __name__ == '__main__':
     evaluate_lenet5()

@@ -1,7 +1,7 @@
 __author__ = 'dudevil'
 
 from multiprocessing import Process
-# import prctl
+#import prctl
 from sys import platform as _platform
 from signal import SIGHUP
 from Queue import Full
@@ -80,7 +80,14 @@ def transform(image, max_angle=360, flip=False, shift=4, zoom_range=(1/1.2, 1.2)
 
 class Augmenter(Process):
 
-    def __init__(self, queue, images, max_items, random_seed=0, max_angle=360, flatten=True):
+    def __init__(self,
+                 queue,
+                 images,
+                 max_items,
+                 random_seed=0,
+                 max_angle=360,
+                 max_shift=4,
+                 flatten=True):
         super(Augmenter, self).__init__()
         self.q = queue
         self.rng = np.random.RandomState(random_seed)
@@ -88,6 +95,8 @@ class Augmenter(Process):
         self.flatten = flatten
         self.images = images
         self.items_count = max_items
+        self.shift = max_shift
+        self.zoom_range = (1/1.1, 1.1)
         # kill this process if parent process dies
         # this only works on linux, so you should update the code or kill the process
         # yourself if using other OSes
@@ -96,7 +105,20 @@ class Augmenter(Process):
 
     def rand_rotate(self, image):
         angle = self.rng.randint(0, self.max_angle)
-        output = skimage.transform.rotate(image, angle,  mode='constant', cval=1.0)
+        shift_x = self.rng.randint(-self.shift, self.shift)
+        shift_y = self.rng.randint(-self.shift, self.shift)
+        log_zoom_range = np.log(self.zoom_range)
+        #zoom = np.exp(self.rng.uniform(*log_zoom_range))
+        #output = skimage.transform.rotate(image, angle,  mode='constant', cval=1.0)
+        center_y, center_x = np.array(image.shape[:2]) / 2.
+        rotate = skimage.transform.SimilarityTransform(rotation=np.deg2rad(angle))
+        center_shift = skimage.transform.SimilarityTransform(translation=[-center_x, -center_y])
+        # distort backshifting by shift factors
+        shift_inv = skimage.transform.SimilarityTransform(translation=[center_x, center_y])
+        shift = skimage.transform.SimilarityTransform(translation=[shift_x, shift_y])
+        #zoom = skimage.transform.SimilarityTransform(scale=zoom)
+        output = skimage.transform.warp(image, (center_shift + (rotate + shift_inv) + shift),
+                                        mode='constant', cval=1.0)
         if self.flatten:
             return output.flatten()
         return output
