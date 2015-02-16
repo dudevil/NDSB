@@ -31,6 +31,8 @@ class DataSetLoader:
                  shift=4,
                  n_epochs=200,
                  parallel=True,
+                 pad=False,
+                 normalize=True,
                  rng=np.random.RandomState(123)):
         self.data_dir = data_dir
         self.class_labels = {}
@@ -47,16 +49,24 @@ class DataSetLoader:
         # filenames in the testset order
         self.testfilenames = []
         self.rng = rng
+        self.normalize = normalize
         X, y = self.load_images()
         self.X_train, self.X_valid, self.y_train, self.y_valid = self.train_test_split(X, y)
         del X, y
-        self.resize_f = functools.partial(resize,
-                                          output_shape=(self.img_size, self.img_size),
-                                          mode='constant',
-                                          cval=1.)
-        self.X_train_resized = np.vstack(tuple(
-            [x.reshape(1, self.img_size, self.img_size)
-             for x in map(self.resize_f, self.X_train)]))
+
+        if pad:
+            self.resize_f = functools.partial(square,
+                                              output_shape=(self.img_size, self.img_size),
+                                              flatten=False)
+        else:
+            self.resize_f = lambda x: resize(x, output_shape=(self.img_size, self.img_size),
+                                             mode='constant',
+                                             cval=1.)
+
+        self.X_train_resized = np.vstack(tuple([x.reshape(1, self.img_size, self.img_size)
+                                                for x in map(self.resize_f, self.X_train)]))
+        self.X_valid_resized = np.vstack(tuple([x.reshape(1, self.img_size * self.img_size)
+                                                for x in map(self.resize_f, self.X_valid)]))
         if parallel:
             self.queue = Queue(min(5, n_epochs+1))
             self.augmenter = Augmenter(self.queue,
@@ -65,6 +75,7 @@ class DataSetLoader:
                                        random_seed=self.rng.randint(9999),
                                        max_angle=rotate_angle,
                                        max_shift=shift,
+                                       normalize=normalize,
                                        flatten=True)
             self.augmenter.start()
 
@@ -104,11 +115,13 @@ class DataSetLoader:
         # yield train set permutations indefinately
         while True:
             shuff_ind = self.rng.permutation(n_samples)
-            if padded:
-                yield self.X_train_padded[shuff_ind].astype('float32'), self.y_train[shuff_ind]
-            elif augment:
+            if augment:
                 #yield self.X_train_resized[shuff_ind].astype('float32'), self.y_train[shuff_ind]
-                yield self.queue.get().astype("float32"), self.y_train
+                rotated = self.queue.get().astype("float32")
+                if self.normalize:
+                    rotated = (rotated - np.mean(rotated, axis=1, keepdims=True)) \
+                              /(rotated.std(axis=1, keepdims=True) + 1e-5)
+                yield rotated, self.y_train
             else:
                 reshaped = self.X_train_resized.reshape(self.X_train_resized.shape[0], self.img_size * self.img_size)
                 yield reshaped[shuff_ind].astype("float32"), self.y_train[shuff_ind]
@@ -120,17 +133,15 @@ class DataSetLoader:
             #          self.X_train)))
 
 
-    def valid_gen(self, padded=False):
+    def valid_gen(self):
         # will return same shuffled images
         while True:
-            shuff_ind = self.rng.permutation(len(self.X_valid))
-            if padded:
-                yield self.X_valid_padded[shuff_ind].astype('float32'), self.y_valid[shuff_ind]
-            else:
-                xs = np.vstack(tuple([x.reshape(1,-1) for x in
-                    map(functools.partial(resize, output_shape=(self.img_size, self.img_size)),
-                        self.X_valid)]))
-                yield xs[shuff_ind].astype('float32'), self.y_valid[shuff_ind]
+            shuff_ind = self.rng.permutation(len(self.X_valid_resized))
+            xs = self.X_valid_resized
+            if self.normalize:
+                xs = (xs - np.mean(xs, axis=1, keepdims=True)) \
+                     /(xs.std(axis=1, keepdims=True) + 1e-5)
+            yield xs[shuff_ind].astype('float32'), self.y_valid[shuff_ind]
 
     def load_train(self):
         # check if a dataset with the given image size has already been processed

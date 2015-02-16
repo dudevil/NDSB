@@ -241,11 +241,56 @@ class LogisticRegression(object):
         """
         return self.p_y_given_x
 
+class CrossChannelNormalizationBC01(object):
+    """
+    BC01 version of CrossChannelNormalization
+    Parameters
+    ----------
+    alpha : WRITEME
+    k : WRITEME
+    beta : WRITEME
+    n : WRITEME
+    """
+
+    def __init__(self, alpha = 1e-4, k=2, beta=0.75, n=5):
+        self.__dict__.update(locals())
+        del self.self
+
+        if n % 2 == 0:
+            raise NotImplementedError("Only works with odd n for now")
+
+    def __call__(self, bc01):
+        """
+        .. todo::
+            WRITEME
+        """
+        half = self.n // 2
+
+        sq = T.sqr(bc01)
+
+        b, ch, r, c = bc01.shape
+
+        extra_channels = T.alloc(0., b, ch + 2*half, r, c)
+
+        sq = T.set_subtensor(extra_channels[:,half:half+ch,:,:], sq)
+
+        scale = self.k
+
+        for i in xrange(self.n):
+            scale += self.alpha * sq[:,i:i+ch,:,:]
+
+        scale = scale ** self.beta
+
+        return bc01 / scale
 
 class LeNetConvPoolLayer(object):
     """Pool Layer of a convolutional network """
 
-    def __init__(self, rng, input, filter_shape, image_shape, poolsize=(2, 2), activation=relu):
+    def __init__(self, rng, input, filter_shape, image_shape,
+                 poolsize=(2, 2),
+                 stride=(1,1),
+                 normalize=False,
+                 activation=relu):
         """
         Allocate a LeNetConvPoolLayer with shared variable internal parameters.
 
@@ -309,8 +354,12 @@ class LeNetConvPoolLayer(object):
             input=input,
             filters=self.W,
             filter_shape=filter_shape,
-            image_shape=image_shape
+            image_shape=image_shape,
+            subsample=stride
+
         )
+        if normalize:
+            conv_out = CrossChannelNormalizationBC01()(conv_out)
 
         if poolsize:
             # downsample each feature map individually, using maxpooling
@@ -397,6 +446,7 @@ def dropout(rng, input, input_shape, active, rate=0.5):
         return out
 
 
+
 def gen_updates_regular_momentum(loss, all_parameters, learning_rate, momentum, weight_decay=0.0):
     """
     Stohastic gradient descent (SGD) with regular momentum
@@ -442,7 +492,11 @@ def gen_updates_nesterov_momentum_no_bias_decay(loss,
 learning_rate_schedule = {
     0: 0.01,
     100: 0.005,
-    200: 0.001,
+    150: 0.001,
+    160: 0.0009,
+    170: 0.0008,
+    180: 0.0007,
+    190: 0.0005,
     300: 0.0008,
     400: 0.0005,
     450: 0.0001
@@ -451,11 +505,12 @@ learning_rate_schedule = {
 momentum_schedule = {
     0: 0.9,
     102: 0.95,
+    150: 0.99,
     302: 0.99,
     400: 0.995
 }
 
-def evaluate_lenet5(n_epochs=500, nkerns=[32, 64, 128, 128], batch_size=200):
+def evaluate_lenet5(n_epochs=200, nkerns=[32, 64, 128, 128], batch_size=200):
     """ Demonstrates lenet on MNIST dataset
     Build train and evaluate model
     """
@@ -463,12 +518,12 @@ def evaluate_lenet5(n_epochs=500, nkerns=[32, 64, 128, 128], batch_size=200):
     rng = numpy.random.RandomState(121)
     print "Preparing datasets ..."
     # load data and split train/test set stratified by classes
-    dsl = DataSetLoader(rng=rng, img_size=48, n_epochs=n_epochs, parallel=True)
+    dsl = DataSetLoader(rng=rng, img_size=49, n_epochs=n_epochs, parallel=True, pad=True)
     train_gen = dsl.train_gen(augment=True)
     valid_gen = dsl.valid_gen()
     train_x, train_y = train_gen.next()
     valid_x, valid_y = valid_gen.next()
-    test_x = dsl.load_test()
+    # test_x = dsl.load_test()
     # compute number of minibatches for training, validation and testing
     n_train_batches = train_x.shape[0] / batch_size
     n_val_batches = valid_x.shape[0] / batch_size
@@ -500,25 +555,26 @@ def evaluate_lenet5(n_epochs=500, nkerns=[32, 64, 128, 128], batch_size=200):
 
     # Reshape matrix of rasterized images of shape (batch_size, 48 * 48)
     # to a 4D tensor, compatible with our LeNetConvPoolLayer
-    layer0_input = x.reshape((batch_size, 1, 48, 48))
+    layer0_input = x.reshape((batch_size, 1, 49, 49))
 
     # Construct the first convolutional pooling layer:
-    # filtering reduces the image size to (48-5+1 , 48-5+1) = (44, 44)
-    # maxpooling reduces this further to (44/2, 44/2) = (22, 22)
-    # 4D output tensor is thus of shape (batch_size, nkerns[0], 12, 12)
+    # filtering reduces the image size to ((49-8)+1 , (49-8)+1) = (42, 42)
+    # maxpooling reduces this further to (42/2, 42/2) = (21, 21)
+    # 4D output tensor is thus of shape (batch_size, nkerns[0], 21, 21)
     layer0 = LeNetConvPoolLayer(
         rng,
         input=layer0_input,
-        image_shape=(batch_size, 1, 48, 48),
-        filter_shape=(nkerns[0], 1, 5, 5),
+        image_shape=(batch_size, 1, 49, 49),
+        filter_shape=(nkerns[0], 1, 8, 8),
         poolsize=(2, 2),
+        normalize=True,
         activation=relu
     )
 
     #prlayer0 = ParametrizedReLuLayer(layer0.output)
 
     # Construct the second convolutional pooling layer
-    # filtering reduces the image size to (22-5+1, 22-5+1) = (18, 18)
+    # filtering reduces the image size to (21-4+1, 21-4+1) = (18, 18)
     # maxpooling reduces this further to (18/2, 18/2) = (9, 9)
     # 4D output tensor is thus of shape (batch_size, nkerns[1], 14, 14)
     #layer1_input = dropout(rng, layer0.output, (batch_size, nkerns[0], 22, 22), dropout_active, rate=0.1)
@@ -526,9 +582,10 @@ def evaluate_lenet5(n_epochs=500, nkerns=[32, 64, 128, 128], batch_size=200):
     layer1 = LeNetConvPoolLayer(
         rng,
         input=layer0.output,
-        image_shape=(batch_size, nkerns[0], 22, 22),
-        filter_shape=(nkerns[1], nkerns[0], 5, 5),
+        image_shape=(batch_size, nkerns[0], 21, 21),
+        filter_shape=(nkerns[1], nkerns[0], 4, 4),
         poolsize=(2, 2),
+        normalize=True,
         activation=relu
     )
 
@@ -547,7 +604,7 @@ def evaluate_lenet5(n_epochs=500, nkerns=[32, 64, 128, 128], batch_size=200):
     )
 
     # Construct the second convolutional pooling layer
-    # filtering reduces the image size to (9-6+1, 9-6+1) = (4, 4)
+    # filtering reduces the image size to (6-3+1, 6-3+1) = (4, 4)
     # maxpooling reduces this further to (4/2, 4/2) = (2, 2)
     #prlayer2 = ParametrizedReLuLayer(layer2.output)
     layer7 = LeNetConvPoolLayer(
@@ -746,7 +803,7 @@ def evaluate_lenet5(n_epochs=500, nkerns=[32, 64, 128, 128], batch_size=200):
                 # save for later analysis
                 valid_err.append(cost_ij)
                 test_err.append(this_test_logloss)
-                n_iter.append(iter + 1)
+                n_iter.append(epoch)
                 # if we got the best validation score until now
                 if this_test_logloss < best_test_logloss:
 
@@ -781,30 +838,30 @@ def evaluate_lenet5(n_epochs=500, nkerns=[32, 64, 128, 128], batch_size=200):
     ################
     #  Predicting  #
     ################
-    res = []
-    print(test_x.shape)
-
-    n_test_batches = test_x.shape[0] / batch_size
-    test_x = theano.shared(test_x, borrow=True)
-
-    predict = theano.function(
-        [index],
-        layer6.predict_proba(),
-        givens={
-            x: test_x[index * batch_size: (index + 1) * batch_size],
-            dropout_active: theano.shared(numpy.array(0, dtype='int8'), borrow=False)
-            },
-    )
-    for minibatch_index in xrange(n_test_batches):
-            tmp = predict(minibatch_index)
-            res.append(tmp)
-    result = numpy.vstack(tuple(res))
-    print(result.shape)
-    dsl.save_submission(result, '2')
+    # res = []
+    # print(test_x.shape)
+    #
+    # n_test_batches = test_x.shape[0] / batch_size
+    # test_x = theano.shared(test_x, borrow=True)
+    #
+    # predict = theano.function(
+    #     [index],
+    #     layer6.predict_proba(),
+    #     givens={
+    #         x: test_x[index * batch_size: (index + 1) * batch_size],
+    #         dropout_active: theano.shared(numpy.array(0, dtype='int8'), borrow=False)
+    #         },
+    # )
+    # for minibatch_index in xrange(n_test_batches):
+    #         tmp = predict(minibatch_index)
+    #         res.append(tmp)
+    # result = numpy.vstack(tuple(res))
+    # print(result.shape)
+    # dsl.save_submission(result, '2')
 
     # save train and validation errors
     results = numpy.array([n_iter, test_err, valid_err], dtype=numpy.float)
-    numpy.save("data/tidy/4conv_dense2048_smallerlr_shiftscale.npy", results)
+    numpy.save("data/tidy/49_4convlayers_dense2048_norm01.npy", results)
 
 if __name__ == '__main__':
     evaluate_lenet5()
