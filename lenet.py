@@ -342,6 +342,7 @@ class LeNetConvPoolLayer(object):
         # the bias is a 1D tensor -- one bias per output feature map
         b_values = numpy.zeros((filter_shape[0],), dtype=theano.config.floatX)
         self.b = theano.shared(value=b_values, borrow=True)
+        self.ccn = CrossChannelNormalizationBC01()
 
         # parametric relu activation
         if activation == 'prelu':
@@ -359,7 +360,7 @@ class LeNetConvPoolLayer(object):
 
         )
         if normalize:
-            conv_out = CrossChannelNormalizationBC01()(conv_out)
+            conv_out = self.ccn(conv_out)
 
         if poolsize:
             # downsample each feature map individually, using maxpooling
@@ -467,7 +468,7 @@ def gen_updates_nesterov_momentum_no_bias_decay(loss,
                                                 all_bias_parameters,
                                                 learning_rate,
                                                 momentum,
-                                                weight_decay=0.0005):
+                                                weight_decay=0.001):
     """
     Nesterov momentum, but excluding the biases from the weight decay.
     If biases are included learning the network seems impossible.
@@ -490,13 +491,14 @@ def gen_updates_nesterov_momentum_no_bias_decay(loss,
     return updates
 
 learning_rate_schedule = {
-    0: 0.01,
+    0: 0.02,
+    50: 0.01,
     100: 0.005,
-    150: 0.001,
-    160: 0.0009,
-    170: 0.0008,
-    180: 0.0007,
-    190: 0.0005,
+    150: 0.004,
+    200: 0.003,
+    250: 0.002,
+    300: 0.001,
+    350: 0.0005,
     300: 0.0008,
     400: 0.0005,
     450: 0.0001
@@ -504,13 +506,10 @@ learning_rate_schedule = {
 
 momentum_schedule = {
     0: 0.9,
-    102: 0.95,
-    150: 0.99,
-    302: 0.99,
-    400: 0.995
+    300: 0.95,
 }
 
-def evaluate_lenet5(n_epochs=200, nkerns=[32, 64, 128, 128], batch_size=200):
+def evaluate_lenet5(n_epochs=400, nkerns=[32, 64, 192, 128], batch_size=200):
     """ Demonstrates lenet on MNIST dataset
     Build train and evaluate model
     """
@@ -634,13 +633,13 @@ def evaluate_lenet5(n_epochs=200, nkerns=[32, 64, 128, 128], batch_size=200):
     # prlayer4 = ParametrizedReLuLayer(layer3.output)
     # Maxout layer reduces output dimension to (batch_size, input_dim / pool_size)
     # in this case: (batch_size, 512/2) = (batch_size, 256)
-    # maxlayer1 = MaxOutLayer(
-    #      input=layer3.output,
-    #      input_shape=(batch_size, 2560),
-    #      pool_size=2
-    # )
+    maxlayer1 = MaxOutLayer(
+         input=layer3.output,
+         input_shape=(batch_size, 2048),
+         pool_size=2
+    )
     # add dropout at 0.5 rate
-    layer4_input = dropout(rng, layer3.output, (batch_size, 2048), dropout_active)
+    layer4_input = dropout(rng, maxlayer1.output, (batch_size, 1024), dropout_active)
 
     # Maxout layer reduces output dimension to (batch_size, input_dim / pool_size)
     # in this case: (batch_size, 512/2) = (batch_size, 256)
@@ -648,23 +647,23 @@ def evaluate_lenet5(n_epochs=200, nkerns=[32, 64, 128, 128], batch_size=200):
     layer4 = HiddenLayer(
         rng,
         input=layer4_input,
-        n_in=2048,
+        n_in=1024,
         n_out=2048,
         activation=relu,
         max_col_norm=2.
     )
     # Maxout layer reduces output dimension to (batch_size, input_dim / pool_size)
     # in this case: (batch_size, 512/2) = (batch_size, 256)
-    # maxlayer2 = MaxOutLayer(
-    #     input=layer4.output,
-    #     input_shape=(batch_size, 2560),
-    #     pool_size=2
-    # )
+    maxlayer2 = MaxOutLayer(
+        input=layer4.output,
+        input_shape=(batch_size, 2048),
+        pool_size=2
+    )
     #prlayer5 = ParametrizedReLuLayer(layer4.output)
     # add dropout at 0.5 rate
-    layer6_input = dropout(rng, layer4.output, (batch_size, 2048), dropout_active)
+    layer6_input = dropout(rng, maxlayer2.output, (batch_size, 1024), dropout_active)
     # classify the values of the fully-connected sigmoidal layer
-    layer6 = LogisticRegression(input=layer6_input, n_in=2048, n_out=121)
+    layer6 = LogisticRegression(input=layer6_input, n_in=1024, n_out=121)
 
     # the cost we minimize during training is the NLL of the model
     cost = layer6.negative_log_likelihood(y)
@@ -816,7 +815,12 @@ def evaluate_lenet5(n_epochs=200, nkerns=[32, 64, 128, 128], batch_size=200):
                     best_test_logloss = this_test_logloss
                     best_test_loss = this_test_loss
                     best_iter = iter
+            if epoch % 100 == 0:
 
+                numpy.save("data/tidy/%d_layer0.npy" % epoch, layer0.W.get_value(borrow=True))
+                numpy.save("data/tidy/%d_layer3.npy" % epoch, layer3.W.get_value(borrow=True))
+                numpy.save("data/tidy/%d_layer4.npy" % epoch, layer4.W.get_value(borrow=True))
+                numpy.save("data/tidy/%d_layer6.npy" % epoch, layer6.W.get_value(borrow=True))
             if patience <= iter:
                 done_looping = True
                 break
