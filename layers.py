@@ -433,11 +433,11 @@ class SliceLayer(object):
         # upper left
         part0 = input[:, :, :nx, :ny]
         # upper right
-        part1 = input[:, :, nx:, :ny]
+        part1 = input[:, :, -nx:, :ny]
         # lower left
-        part2 = input[:, :, :nx, ny:]
+        part2 = input[:, :, :nx, -ny:]
         # lower right
-        part3 = input[:, :, nx:, ny:]
+        part3 = input[:, :, -nx:, -ny:]
         # center
         x_offset = (x - nx) // 2  # int division
         y_offset = (y - ny) // 2  # int division
