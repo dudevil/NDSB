@@ -15,11 +15,13 @@ import cPickle
 import functools
 import numpy as np
 import pandas as pd
+import theano
 from skimage.io import imread
 from skimage.transform import resize
 from sklearn.cross_validation import StratifiedShuffleSplit
 from augmentation import square, Augmenter
 from multiprocessing import Queue
+
 
 
 class DataSetLoader:
@@ -67,8 +69,9 @@ class DataSetLoader:
                                                 for x in map(self.resize_f, self.X_train)]))
         self.X_valid_resized = np.vstack(tuple([x.reshape(1, self.img_size * self.img_size)
                                                 for x in map(self.resize_f, self.X_valid)]))
+        del self.X_train, self.X_valid
         if parallel:
-            self.queue = Queue(min(5, n_epochs+1))
+            self.queue = Queue(min(2, n_epochs+1))
             self.augmenter = Augmenter(self.queue,
                                        self.X_train_resized,
                                        max_items=n_epochs+1,
@@ -109,22 +112,22 @@ class DataSetLoader:
         return pd.Series(images), np.array(y, dtype='int32')
 
     def train_gen(self, padded=False, augment=False):
-        assert len(self.X_train) == len(self.y_train)
-        n_samples = len(self.X_train)
+        assert len(self.X_train_resized) == len(self.y_train)
+        n_samples = len(self.X_train_resized)
         # xs = np.zeros((n_samples, self.img_size * self.img_size), dtype='float32')
         # yield train set permutations indefinately
         while True:
             shuff_ind = self.rng.permutation(n_samples)
             if augment:
                 #yield self.X_train_resized[shuff_ind].astype('float32'), self.y_train[shuff_ind]
-                rotated = self.queue.get().astype("float32")
+                rotated = self.queue.get().astype(theano.config.floatX)
                 if self.normalize:
                     rotated = (rotated - np.mean(rotated, axis=1, keepdims=True)) \
                               /(rotated.std(axis=1, keepdims=True) + 1e-5)
                 yield rotated, self.y_train
             else:
                 reshaped = self.X_train_resized.reshape(self.X_train_resized.shape[0], self.img_size * self.img_size)
-                yield reshaped[shuff_ind].astype("float32"), self.y_train[shuff_ind]
+                yield reshaped[shuff_ind].astype(theano.config.floatX), self.y_train[shuff_ind]
             #transform the training set
             # xs = np.vstack(tuple(
             #      map(functools.partial(transform,
@@ -141,7 +144,7 @@ class DataSetLoader:
             if self.normalize:
                 xs = (xs - np.mean(xs, axis=1, keepdims=True)) \
                      /(xs.std(axis=1, keepdims=True) + 1e-5)
-            yield xs[shuff_ind].astype('float32'), self.y_valid[shuff_ind]
+            yield xs[shuff_ind].astype(theano.config.floatX), self.y_valid[shuff_ind]
 
     def load_train(self):
         # check if a dataset with the given image size has already been processed
