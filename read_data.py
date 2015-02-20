@@ -71,7 +71,7 @@ class DataSetLoader:
                                                 for x in map(self.resize_f, self.X_valid)]))
         del self.X_train, self.X_valid
         if parallel:
-            self.queue = Queue(min(2, n_epochs+1))
+            self.queue = Queue(min(5, n_epochs+1))
             self.augmenter = Augmenter(self.queue,
                                        self.X_train_resized,
                                        max_items=n_epochs+1,

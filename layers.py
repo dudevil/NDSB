@@ -107,7 +107,7 @@ class HiddenLayer(object):
         W = self.W
         if W in updates and self.max_col_norm:
             updated_W = updates[W]
-            col_norms = T.sqrt(T.sum(T.sqr(updated_W), axis=0))
+            col_norms = T.sqrt(T.sum(T.sqr(updated_W), axis=0, keepdims=True))
             desired_norms = T.clip(col_norms, 0, self.max_col_norm)
             constrained_W = updated_W * (desired_norms / (1e-7 + col_norms))
             updates[W] = constrained_W

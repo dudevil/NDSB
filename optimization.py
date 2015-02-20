@@ -5,6 +5,7 @@ This file contains code for generating SGD updates with regular and Nesterov mom
 """
 
 import theano
+import numpy as np
 
 
 def gen_updates_regular_momentum(loss, all_parameters, learning_rate, momentum, weight_decay=0.0):
@@ -38,7 +39,8 @@ def gen_updates_nesterov_momentum_no_bias_decay(loss,
     all_grads = [theano.grad(loss, param) for param in all_parameters]
     updates = []
     for param_i, grad_i in zip(all_parameters, all_grads):
-        mparam_i = theano.shared(param_i.get_value()*0.)
+        mparam_i = theano.shared(np.zeros(param_i.get_value().shape, dtype=theano.config.floatX),
+                                 broadcastable=param_i.broadcastable)
         if param_i in all_bias_parameters:
             full_grad = grad_i
         else:

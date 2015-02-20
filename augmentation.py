@@ -95,11 +95,11 @@ class Augmenter(Process):
         self.max_angle = max_angle
         self.flatten = flatten
         self.images = images
-        print(images.shape)
         self.items_count = max_items
         self.shift = max_shift
         self.zoom_range = (1/1.1, 1.1)
         self.normalize = normalize
+        self.angle = 0
         # kill this process if parent process dies
         # this only works on linux, so you should update the code or kill the process
         # yourself if using other OSes
@@ -126,12 +126,27 @@ class Augmenter(Process):
             return output.flatten()
         return output
 
+    def rotate90(self, image):
+        center_y, center_x = np.array(image.shape[:2]) / 2.
+        rotate = skimage.transform.SimilarityTransform(rotation=np.deg2rad(self.angle))
+        center_shift = skimage.transform.SimilarityTransform(translation=[-center_x, -center_y])
+        # distort backshifting by shift factors
+        shift_inv = skimage.transform.SimilarityTransform(translation=[center_x, center_y])
+        #zoom = skimage.transform.SimilarityTransform(scale=zoom)
+        output = skimage.transform.warp(image, (center_shift + (rotate + shift_inv)),
+                                        mode='constant', cval=1.0)
+        self.angle = (self.angle + 90) % 360
+        if self.flatten:
+            return output.flatten()
+        return output
+
+
 #   @do_cprofile
     def run(self):
         try:
             while self.items_count:
-                rotated = np.vstack(tuple(map(self.rand_rotate, self.images)))
-                self.q.put(rotated, block=True, timeout=180)
+                rotated = np.vstack(tuple(map(self.rotate90, self.images)))
+                self.q.put(rotated, block=True, timeout=360)
                 self.items_count -= 1
         except Full:
         # probably the consumer is not processing values anymore
