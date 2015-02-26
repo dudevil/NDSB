@@ -23,7 +23,6 @@ from augmentation import square, Augmenter
 from multiprocessing import Queue
 
 
-
 class DataSetLoader:
 
     def __init__(self,

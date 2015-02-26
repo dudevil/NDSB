@@ -425,6 +425,7 @@ class DropOutLayer(object):
         self.output = T.switch(active, mask * input / rate, input)
         self.output_shape = input_shape
 
+
 class SliceLayer(object):
 
     def __init__(self, input, input_shape, out_imgshape=(48, 48)):
