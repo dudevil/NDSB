@@ -17,7 +17,8 @@ learning_rate_schedule = {
     50: 0.01,
     150: 0.005,
     200: 0.002,
-    300: 0.001,
+    250: 0.001,
+    300: 0.0005,
     350: 0.0001
 }
 
@@ -26,8 +27,8 @@ momentum_schedule = {
     350: 0.95,
 }
 
-n_epochs = 400
-nkerns = [32, 64, 96, 128, 128]
+n_epochs = 375
+nkerns = [32, 64, 96, 128, 256]
 batch_size = 200
 
 if __name__ == "__main__":
@@ -37,20 +38,18 @@ if __name__ == "__main__":
     rng = np.random.RandomState(250215)
     print "Preparing datasets ..."
     # load data and split train/test set stratified by classes
-    dsl = DataSetLoader(rng=rng, img_size=48, n_epochs=n_epochs, parallel=True, pad=True)
+    dsl = DataSetLoader(rng=rng, img_size=48, n_epochs=n_epochs, parallel=True, pad=False)
     train_gen = dsl.train_gen(augment=True)
     valid_gen = dsl.valid_gen()
     train_x, train_y = train_gen.next()
     valid_x, valid_y = valid_gen.next()
-    # test_x = dsl.load_test()
-    # compute number of minibatches for training, validation and testing
+
+    # compute number of minibatches for training and validation
     n_train_batches = train_x.shape[0] / batch_size
     n_val_batches = valid_x.shape[0] / batch_size
-    # n_test_batches = test_x.shape[0] / batch_size
 
     train_x = theano.shared(train_x, borrow=True)
     valid_x = theano.shared(valid_x, borrow=True)
-    # won't fit into my gpu memory
 
     train_y = T.cast(theano.shared(train_y, borrow=True), dtype='int32')
     valid_y = T.cast(theano.shared(valid_y, borrow=True), dtype='int32')
@@ -160,7 +159,7 @@ if __name__ == "__main__":
         rng,
         input=dout1.output,
         n_in=dout1.output_shape[1],
-        n_out=1024,
+        n_out=768,
         activation=relu,
         max_col_norm=0
     )
@@ -169,19 +168,19 @@ if __name__ == "__main__":
     # in this case: (batch_size, 512/2) = (batch_size, 256)
     maxlayer1 = MaxOutLayer(
         input=layer3.output,
-        input_shape=(batch_size, 1024),
+        input_shape=(batch_size, 768),
         pool_size=2
     )
     # add dropout at 0.5 rate
-    dout2 = DropOutLayer(rng, maxlayer1.output, (batch_size, 512), dropout_active)
+    dout2 = DropOutLayer(rng, maxlayer1.output, (batch_size, 384), dropout_active)
     # Maxout layer reduces output dimension to (batch_size, input_dim / pool_size)
     # in this case: (batch_size, 512/2) = (batch_size, 256)
     # one more fully-connected relu layer
     layer4 = HiddenLayer(
         rng,
         input=dout2.output,
-        n_in=512,
-        n_out=1024,
+        n_in=384,
+        n_out=768,
         activation=None,
         max_col_norm=0
     )
@@ -189,13 +188,13 @@ if __name__ == "__main__":
     # in this case: (batch_size, 2048/2) = (batch_size, 1024)
     maxlayer2 = MaxOutLayer(
         input=layer4.output,
-        input_shape=(batch_size, 1024),
+        input_shape=(batch_size, 768),
         pool_size=2
     )
     # add dropout at 0.5 rate
-    dout3 = DropOutLayer(rng, maxlayer2.output, (batch_size, 512), dropout_active)
+    dout3 = DropOutLayer(rng, maxlayer2.output, (batch_size, 384), dropout_active)
     # classify the values of the fully-connected sigmoidal layer
-    layer6 = LogisticRegression(input=dout3.output, n_in=512, n_out=121)
+    layer6 = LogisticRegression(input=dout3.output, n_in=384, n_out=121)
 
     # the cost we minimize during training is the NLL of the model
     cost = layer6.negative_log_likelihood(y)
@@ -371,10 +370,11 @@ if __name__ == "__main__":
           'with misclassification rate %f %%' %
           (best_test_logloss, best_iter + 1, best_iter / n_train_batches + 1, best_test_loss * 100.))
     print >> sys.stderr, ('The training lasted %.2fm' % ((end_time - start_time) / 60.))
-    ################
-    #  Predicting  #
-    ################
+    ###############
+    # Predicting  #
+    ###############
     # res = []
+    # test_x = dsl.load_test()
     # print(test_x.shape)
     #
     # n_test_batches = test_x.shape[0] / batch_size
@@ -384,20 +384,21 @@ if __name__ == "__main__":
     #     [index],
     #     layer6.predict_proba(),
     #     givens={
-    #         x: test_x[index * batch_size: (index + 1) * batch_size],
+    #         x: test_x,
     #         dropout_active: theano.shared(np.array(0, dtype='int8'), borrow=False)
     #         },
     # )
-    # for minibatch_index in xrange(n_test_batches):
-    #         tmp = predict(minibatch_index)
-    #         res.append(tmp)
-    # result = np.vstack(tuple(res))
+    # # for minibatch_index in xrange(n_test_batches):
+    # #         tmp = predict(minibatch_index)
+    # #         res.append(tmp)
+    # # result = np.vstack(tuple(res))
+    # result = pre
     # print(result.shape)
-    # dsl.save_submission(result, '2')
+    # dsl.save_submission(result, '3')
 
     # save train and validation errors
     results = np.array([n_iter, test_err, valid_err], dtype=np.float)
-    np.save("data/tidy/5conv_prelus_maxouts_rotations.npy", results)
+    np.save("data/tidy/5conv_prelus_maxouts768_rotations15_shift4_nopad.npy", results)
     #a = np.array([n_iter, a0, a1, a2, a3], dtype=np.float)
     #np.save("data/tidy/as.npy", a)
 

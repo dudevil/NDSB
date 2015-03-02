@@ -128,14 +128,17 @@ class Augmenter(Process):
 
     def rotate90(self, image):
         center_y, center_x = np.array(image.shape[:2]) / 2.
+        shift_x = self.rng.randint(-self.shift, self.shift)
+        shift_y = self.rng.randint(-self.shift, self.shift)
         rotate = skimage.transform.SimilarityTransform(rotation=np.deg2rad(self.angle))
         center_shift = skimage.transform.SimilarityTransform(translation=[-center_x, -center_y])
         # distort backshifting by shift factors
         shift_inv = skimage.transform.SimilarityTransform(translation=[center_x, center_y])
+        shift = skimage.transform.SimilarityTransform(translation=[shift_x, shift_y])
         #zoom = skimage.transform.SimilarityTransform(scale=zoom)
-        output = skimage.transform.warp(image, (center_shift + (rotate + shift_inv)),
+        output = skimage.transform.warp(image, (center_shift + (rotate + shift_inv) + shift),
                                         mode='constant', cval=1.0)
-        self.angle = (self.angle + 90) % 360
+        self.angle = (self.angle + 15) % 360
         if self.flatten:
             return output.flatten()
         return output
