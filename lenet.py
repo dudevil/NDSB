@@ -28,7 +28,7 @@ momentum_schedule = {
 }
 
 n_epochs = 375
-nkerns = [32, 64, 96, 128, 256]
+nkerns = [32, 64, 96, 128, 192]
 batch_size = 200
 
 if __name__ == "__main__":
@@ -129,7 +129,7 @@ if __name__ == "__main__":
         input=prlayer2.output,
         image_shape=(batch_size, nkerns[2], 8, 8),
         filter_shape=(nkerns[3], nkerns[2], 3, 3),
-        poolsize=(2, 2),
+        poolsize=(),
         activation=None
     )
 
@@ -142,8 +142,8 @@ if __name__ == "__main__":
     layer9 = ConvPoolLayer(
         rng,
         input=prlayer3.output,
-        image_shape=(batch_size, nkerns[3], 3, 3),
-        filter_shape=(nkerns[4], nkerns[3], 2, 2),
+        image_shape=(batch_size, nkerns[3], 6, 6),
+        filter_shape=(nkerns[4], nkerns[3], 3, 3),
         poolsize=(),
         activation=None
     )
@@ -153,7 +153,7 @@ if __name__ == "__main__":
     # shape (batch_size, num_pixels) (i.e matrix of rasterized images).
     # This will generate a matrix of shape (batch_size, nkerns[2] * 5 * 5),
     #merge = MergeLayer(prlayer3.output, (batch_size * slice.n_parts, 1, nkerns[3], 2, 2), slice.n_parts)
-    dout1 = DropOutLayer(rng, prlayer5.output.flatten(2), (batch_size, nkerns[4] * 2 * 2), dropout_active)
+    dout1 = DropOutLayer(rng, prlayer5.output.flatten(2), (batch_size, nkerns[4] * 4 * 4), dropout_active)
     # construct a fully-connected relu layer
     layer3 = HiddenLayer(
         rng,
@@ -398,7 +398,7 @@ if __name__ == "__main__":
 
     # save train and validation errors
     results = np.array([n_iter, test_err, valid_err], dtype=np.float)
-    np.save("data/tidy/5conv_prelus_maxouts768_rotations15_shift4_nopad.npy", results)
+    np.save("data/tidy/5convnpl_prelus_maxouts768_rotations15_shift4_nopad.npy", results)
     #a = np.array([n_iter, a0, a1, a2, a3], dtype=np.float)
     #np.save("data/tidy/as.npy", a)
 

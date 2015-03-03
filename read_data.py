@@ -123,7 +123,7 @@ class DataSetLoader:
                 if self.normalize:
                     rotated = (rotated - np.mean(rotated, axis=1, keepdims=True)) \
                               /(rotated.std(axis=1, keepdims=True) + 1e-5)
-                yield rotated, self.y_train
+                yield rotated[shuff_ind], self.y_train[shuff_ind]
             else:
                 reshaped = self.X_train_resized.reshape(self.X_train_resized.shape[0], self.img_size * self.img_size)
                 yield reshaped[shuff_ind].astype(theano.config.floatX), self.y_train[shuff_ind]
