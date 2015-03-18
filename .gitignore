@@ -3,3 +3,4 @@ papers/
 .idea/
 *.pyc
 .ipynb_checkpoints/
+analysis/*.ipynb

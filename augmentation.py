@@ -21,7 +21,7 @@ import numpy as np
 #             profile.print_stats()
 #     return profiled_func
 
-def square(image, resize=(48, 48), flatten=True):
+def square(image, output_shape=(48, 48), flatten=True):
     img_x, img_y = image.shape
     diff = np.abs(img_y - img_x)
     # pad image from two sides, if necessary add extra pixel at one side
@@ -30,10 +30,10 @@ def square(image, resize=(48, 48), flatten=True):
     # only pad the smaller axis
     padding[np.argmin(image.shape)] = pad
     padded = np.pad(image, padding, mode='constant', constant_values=(255,))
-    if resize and flatten:
-        return skimage.transform.resize(padded, resize).flatten()
-    if resize:
-        return skimage.transform.resize(padded, resize)
+    if output_shape and flatten:
+        return skimage.transform.resize(padded, output_shape).flatten()
+    if output_shape:
+        return skimage.transform.resize(padded, output_shape)
     if flatten:
         return padded.flatten()
     return padded
@@ -87,6 +87,7 @@ class Augmenter(Process):
                  random_seed=0,
                  max_angle=360,
                  max_shift=4,
+                 normalize=True,
                  flatten=True):
         super(Augmenter, self).__init__()
         self.q = queue
@@ -96,7 +97,9 @@ class Augmenter(Process):
         self.images = images
         self.items_count = max_items
         self.shift = max_shift
-        self.zoom_range = (1/1.1, 1.1)
+        self.zoom_range = (1/1.2, 1.2)
+        self.normalize = normalize
+        self.angle = 0
         # kill this process if parent process dies
         # this only works on linux, so you should update the code or kill the process
         # yourself if using other OSes
@@ -123,14 +126,33 @@ class Augmenter(Process):
             return output.flatten()
         return output
 
-#    @do_cprofile
+    def rotate90(self, image):
+        center_y, center_x = np.array(image.shape[:2]) / 2.
+        shift_x = self.rng.randint(-self.shift, self.shift)
+        shift_y = self.rng.randint(-self.shift, self.shift)
+        #log_zoom_range = np.log(self.zoom_range)
+        #zoom = np.exp(self.rng.uniform(*log_zoom_range))
+        rotate = skimage.transform.SimilarityTransform(rotation=np.deg2rad(self.angle))
+        center_shift = skimage.transform.SimilarityTransform(translation=[-center_x, -center_y])
+        # distort backshifting by shift factors
+        shift_inv = skimage.transform.SimilarityTransform(translation=[center_x, center_y])
+        shift = skimage.transform.SimilarityTransform(translation=[shift_x, shift_y])
+        output = skimage.transform.warp(image, (center_shift + (rotate + shift_inv) + shift),
+                                        mode='constant', cval=1.0)
+        self.angle = (self.angle + 15) % 360
+        if self.flatten:
+            return output.flatten()
+        return output
+
+
+#   @do_cprofile
     def run(self):
         try:
             while self.items_count:
-                rotated = np.vstack(tuple(map(self.rand_rotate, self.images)))
-                self.q.put(rotated, block=True, timeout=100)
+                rotated = np.vstack(tuple(map(self.rotate90, self.images)))
+                self.q.put(rotated, block=True, timeout=3600)
                 self.items_count -= 1
         except Full:
-        # probably the consumer is not processingvalues anymores
+        # probably the consumer is not processing values anymore
             print("Queue full")
         print("Exiting")
