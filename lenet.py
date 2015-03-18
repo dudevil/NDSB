@@ -14,20 +14,20 @@ from layers import *
 # define some parameters
 learning_rate_schedule = {
     0: 0.02,
+    14: 0.015,
     50: 0.01,
     150: 0.005,
-    200: 0.002,
-    250: 0.001,
-    300: 0.0005,
-    350: 0.0001
+    175: 0.001,
+    200: 0.0001,
 }
 
 momentum_schedule = {
     0: 0.9,
-    350: 0.95,
+    200: 0.95,
 }
 
-n_epochs = 375
+#n_epochs = 375
+n_epochs = 210
 nkerns = [32, 64, 96, 128, 192]
 batch_size = 200
 
@@ -72,6 +72,18 @@ if __name__ == "__main__":
     # Reshape matrix of rasterized images of shape (batch_size, 48 * 48)
     # to a 4D tensor, compatible with our ConvPoolLayer
     layer0_input = x.reshape((batch_size, 1, 48, 48))
+
+    # layer10 = ConvPoolLayer(
+    #     rng,
+    #     input=layer0_input,
+    #     image_shape=(batch_size, 1, 98, 98),
+    #     filter_shape=(nkerns[0], 1, 4, 4),
+    #     poolsize=(2, 2),
+    #     normalize=True,
+    #     activation=None
+    # )
+    #
+    # prlayer6 = ParametrizedReLuLayer(layer10.output)
     #slice = SliceLayer(x.reshape((batch_size, 1, 64, 64)), (batch_size, 1, 64, 64))
     #new_batch_size = batch_size * slice.n_parts
     # Construct the first convolutional pooling layer:
@@ -102,7 +114,6 @@ if __name__ == "__main__":
         image_shape=(batch_size, nkerns[0], 22, 22),
         filter_shape=(nkerns[1], nkerns[0], 3, 3),
         poolsize=(2, 2),
-        normalize=True,
         activation=None
     )
 
@@ -181,7 +192,7 @@ if __name__ == "__main__":
         input=dout2.output,
         n_in=384,
         n_out=768,
-        activation=None,
+        activation=relu,
         max_col_norm=0
     )
     # Maxout layer reduces output dimension to (batch_size, input_dim / pool_size)
@@ -226,14 +237,14 @@ if __name__ == "__main__":
     # create a list of all model parameters to be fit by gradient descent
     params = layer6.params + layer4.params + layer2.params + layer1.params + layer0.params + \
              layer3.params +  layer8.params + layer9.params + prlayer0.params + \
-             prlayer1.params + prlayer2.params + prlayer3.params + prlayer5.params
+             prlayer1.params + prlayer2.params + prlayer3.params + prlayer5.params # + layer10.params + prlayer6.params
 
 
     # a list of bias parameters: these will be excluded from the Nesterov momentum updates
     bias_params = layer6.bias_params + layer4.bias_params + layer2.bias_params + \
                   layer1.bias_params + layer0.bias_params + layer3.bias_params +  layer8.bias_params + \
                   layer9.bias_params + prlayer3.params + prlayer2.params + prlayer1.params + prlayer0.params + \
-                  prlayer5.params
+                  prlayer5.params #+ prlayer6.params + layer10.bias_params
 
     # we generate the updates to the parameters with Nesterov momentum
     updates = gen_updates_nesterov_momentum_no_bias_decay(cost, params,
@@ -373,32 +384,31 @@ if __name__ == "__main__":
     ###############
     # Predicting  #
     ###############
-    # res = []
-    # test_x = dsl.load_test()
-    # print(test_x.shape)
-    #
-    # n_test_batches = test_x.shape[0] / batch_size
-    # test_x = theano.shared(test_x, borrow=True)
-    #
-    # predict = theano.function(
-    #     [index],
-    #     layer6.predict_proba(),
-    #     givens={
-    #         x: test_x,
-    #         dropout_active: theano.shared(np.array(0, dtype='int8'), borrow=False)
-    #         },
-    # )
-    # # for minibatch_index in xrange(n_test_batches):
-    # #         tmp = predict(minibatch_index)
-    # #         res.append(tmp)
-    # # result = np.vstack(tuple(res))
-    # result = pre
-    # print(result.shape)
-    # dsl.save_submission(result, '3')
+    res = []
+    test_x = dsl.load_test()
+    print(test_x.shape)
+
+    n_test_batches = test_x.shape[0] / batch_size
+    test_x = theano.shared(test_x, borrow=True)
+
+    predict = theano.function(
+        [index],
+        layer6.predict_proba(),
+        givens={
+            x: test_x[index * batch_size: (index + 1) * batch_size],
+            dropout_active: theano.shared(np.array(0, dtype='int8'), borrow=False)
+            },
+    )
+    for minibatch_index in xrange(n_test_batches):
+            tmp = predict(minibatch_index)
+            res.append(tmp)
+    result = np.vstack(tuple(res))
+    print(result.shape)
+    dsl.save_submission(result, '8')
 
     # save train and validation errors
     results = np.array([n_iter, test_err, valid_err], dtype=np.float)
-    np.save("data/tidy/5convnpl_prelus_maxouts768_rotations15_shift4_nopad.npy", results)
+    np.save("data/tidy/5convnpl_prelus_maxouts768_rotations15_shift4_nopad_server.npy", results)
     #a = np.array([n_iter, a0, a1, a2, a3], dtype=np.float)
     #np.save("data/tidy/as.npy", a)
 

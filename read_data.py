@@ -70,7 +70,7 @@ class DataSetLoader:
                                                 for x in map(self.resize_f, self.X_valid)]))
         del self.X_train, self.X_valid
         if parallel:
-            self.queue = Queue(min(5, n_epochs+1))
+            self.queue = Queue(min(1, n_epochs+1))
             self.augmenter = Augmenter(self.queue,
                                        self.X_train_resized,
                                        max_items=n_epochs+1,
@@ -193,6 +193,9 @@ class DataSetLoader:
             images[i, ...] = resize(img_array, (self.img_size, self.img_size)).reshape(1, -1)
             self.testfilenames.append(imfile)
         assert len(images) == len(self.testfilenames), "Number of files doesn't match number of images"
+        if self.normalize:
+                images = (images - np.mean(images, axis=1, keepdims=True)) \
+                     /(images.std(axis=1, keepdims=True) + 1e-5)
         # cache the resulting array for future use
         np.save(self.test_file, images)
         return images

@@ -97,7 +97,7 @@ class Augmenter(Process):
         self.images = images
         self.items_count = max_items
         self.shift = max_shift
-        self.zoom_range = (1/1.1, 1.1)
+        self.zoom_range = (1/1.2, 1.2)
         self.normalize = normalize
         self.angle = 0
         # kill this process if parent process dies
@@ -130,12 +130,13 @@ class Augmenter(Process):
         center_y, center_x = np.array(image.shape[:2]) / 2.
         shift_x = self.rng.randint(-self.shift, self.shift)
         shift_y = self.rng.randint(-self.shift, self.shift)
+        #log_zoom_range = np.log(self.zoom_range)
+        #zoom = np.exp(self.rng.uniform(*log_zoom_range))
         rotate = skimage.transform.SimilarityTransform(rotation=np.deg2rad(self.angle))
         center_shift = skimage.transform.SimilarityTransform(translation=[-center_x, -center_y])
         # distort backshifting by shift factors
         shift_inv = skimage.transform.SimilarityTransform(translation=[center_x, center_y])
         shift = skimage.transform.SimilarityTransform(translation=[shift_x, shift_y])
-        #zoom = skimage.transform.SimilarityTransform(scale=zoom)
         output = skimage.transform.warp(image, (center_shift + (rotate + shift_inv) + shift),
                                         mode='constant', cval=1.0)
         self.angle = (self.angle + 15) % 360
@@ -149,7 +150,7 @@ class Augmenter(Process):
         try:
             while self.items_count:
                 rotated = np.vstack(tuple(map(self.rotate90, self.images)))
-                self.q.put(rotated, block=True, timeout=360)
+                self.q.put(rotated, block=True, timeout=3600)
                 self.items_count -= 1
         except Full:
         # probably the consumer is not processing values anymore
